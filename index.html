@@ -304,12 +304,12 @@ function startEars() {
   if (!SR) { warn("Ce navigateur ne sait pas écouter. Ouvrez Jarvis dans Chrome ou Edge."); return; }
   earsWanted = true;
   if (rec || earsPaused) return;
-  const me = new SR(); rec = me; rec.lang = "fr-FR"; rec.continuous = true; rec.interimResults = true;
+  const me = new SR(); rec = me; rec.lang = "fr-FR"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 5;
   let silenceT = null;
   rec.onresult = (e) => {
     let interim = "", finals = [];
     for (let i = e.resultIndex; i < e.results.length; i++) {
-      const t = e.results[i][0].transcript;
+      const t = e.results[i].isFinal ? bestAlternative(e.results[i]) : e.results[i][0].transcript;
       if (e.results[i].isFinal) finals.push(t); else interim += t;
     }
     const now = (finals.join(" ") + " " + interim).trim();
@@ -327,7 +327,7 @@ function startEars() {
     if (sleeping) { if (WAKE_PHRASE.test(interim)) { clearTimeout(silenceT); try { me.abort(); } catch {} wakeUp(); } return; }
     heardEl.textContent = "J'entends : « " + interim + " »";
     // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
-    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 700);
+    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 1000);
   };
   rec.onerror = (e) => {
     if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
@@ -420,7 +420,29 @@ const STOP_WORDS = /\b(stop|attends?|tais[- ]toi|chut|arr[êe]te|silence|dj?arvi
 const WAKE_PHRASE = /r[ée]veill?e[- ]?toi|r[ée]veil|sors de (la )?veille|plus en veille|debout|r[ée]active|allume[- ]toi/i;
 const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive)[\s,.!?]*/i;
 const needWake = () => store.get("wake", "0") === "1";
+/* Mieux comprendre une prononciation imparfaite */
+const KNOWN = /heure|date|jour|youtube|google|ouvre|lance|mets|met |joue|cherche|m[ée]t[ée]o|chrono|alarme|minuteur|r[ée]veil|veille|blague|combien|calcul|qui est|c'est quoi|stop|voix|grave|aigu|annule|spotify|netflix|discord|jarvis/i;
+// mots que la reconnaissance vocale entend souvent de travers
+const FIXES = [
+  [/\b(j'arrive|jarvice|djarvis|jarvi|jar vis|charvis|gervais|j'avis|jarv[iy]s+e?)\b/gi, "Jarvis"],
+  [/\b(mes? t[ée]os?|met t[ée]o|mettez au|m[ée]t[ée]os?|m[ée]t[ée]o)\b/gi, "météo"],
+  [/\b(you ?tub?e?|youtoub|yout[ou]be|you tu)\b/gi, "youtube"],
+  [/\b(cro ?no|chron[ao]|crono|chrono m[èe]tre|chronom[èe]tre)\b/gi, "chrono"],
+  [/\b(minute? heure|minuteurs?|minuteuse|minutor)\b/gi, "minuteur"],
+  [/\b(alarm|alarmes|la rame|l'alarme)\b/gi, "alarme"],
+  [/\b(r[ée]veil toi|r[ée]veilles? toi|r[ée]veille toi)\b/gi, "réveille-toi"],
+  [/\b(quel leur|kel heure|quelle eure|quel heure|quelle heur)\b/gi, "quelle heure"],
+  [/\b(en vey|en vei|en vieille|en veil)\b/gi, "en veille"],
+  [/\b(spotif[iy]e?|spot ifi)\b/gi, "spotify"],
+];
+function fixText(t) { for (const [re, to] of FIXES) t = t.replace(re, to); return t.trim(); }
+function bestAlternative(result) {
+  const alts = Array.from({ length: result.length }, (_, k) => fixText(result[k].transcript));
+  return alts.find((a) => KNOWN.test(a)) || alts[0];
+}
+
 function handleHeard(text) {
+  text = fixText(text);
   if (!text || state === "thinking") return;
   if (sleeping) {
     if (ringing && /stop|arr[êe]te|coupe/i.test(text)) { stopRing(); return; }
@@ -450,7 +472,7 @@ function localCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   const now = new Date();
   let m;
-  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return "Très bien monsieur. Je me mets en veille. Dites Jarvis, réveille-toi, quand vous aurez besoin de moi."; }
+  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return "Très bien monsieur. Je me mets en veille."; }
   if (/change(r)? (de |la )?voix|autre voix/.test(s)) return nextVoice() ? "Voici ma nouvelle voix, monsieur. Elle vous convient ?" : "Je n'ai pas d'autre voix disponible sur ce navigateur, monsieur.";
   if (/plus grave/.test(s)) { $("pitch").value = Math.max(0.3, +$("pitch").value - 0.15); store.set("pitch", $("pitch").value); return "Est-ce mieux ainsi, monsieur ?"; }
   if (/plus aigu/.test(s)) { $("pitch").value = Math.min(1.4, +$("pitch").value + 0.15); store.set("pitch", $("pitch").value); return "Comme ceci, monsieur ?"; }
@@ -472,6 +494,7 @@ function localCommand(c) {
 const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
 Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, humour pince-sans-rire discret, loyal.
 Tu réponds avec précision à tout : sciences, histoire, jeux vidéo, devoirs, conseils, idées. Si on te demande une explication, donne l'essentiel clairement.
+Les messages viennent d'une reconnaissance vocale imparfaite et l'utilisateur articule parfois mal : s'il y a des mots bizarres ou mal compris, devine l'intention la plus probable et réponds à cela, sans le faire remarquer. Ne demande de répéter que si c'est vraiment incompréhensible.
 Tu parles à voix haute : réponds toujours en français, en 1 à 4 phrases naturelles, sans listes, sans markdown, sans emoji, sans liens.
 Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}.`;
 
