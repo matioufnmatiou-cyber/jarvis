@@ -234,6 +234,11 @@ function stopSpeaking() {
   endSpeech?.();
   if (state === "speaking") afterSpeech();
 }
+// Coupe net tout son en cours (voix du navigateur + ElevenLabs) : jamais deux voix en même temps
+function hush() {
+  try { speechSynthesis.cancel(); } catch {}
+  if (elevenAudio) { try { elevenAudio.pause(); } catch {} elevenAudio = null; }
+}
 function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking" || state === "thinking") setState(sleeping ? "off" : earsWanted ? "listening" : "off"); }
 
 // Coupure instantanée : on se tait tout de suite ; si aucun mot n'arrive, on reprend la phrase
@@ -260,6 +265,7 @@ async function speakEleven(text, id) {
     if (!r.ok) throw new Error("ElevenLabs " + r.status);
     const url = URL.createObjectURL(await r.blob());
     if (id !== speechId) { URL.revokeObjectURL(url); return true; }   // interrompu entre-temps
+    hush();
     const audio = new Audio(url); elevenAudio = audio;
     try { await audio.play(); } catch { URL.revokeObjectURL(url); elevenAudio = null; throw new Error("lecture bloquée"); }
     setState("speaking");
@@ -307,13 +313,23 @@ function speakBrowser(text, id) {
 
 async function speak(text) {
   if (endSpeech) { const f = endSpeech; endSpeech = null; f(); }   // termine proprement la réponse précédente
-  held = false; clearTimeout(holdTimer);
+  held = false; clearTimeout(holdTimer); holdCtl = null;
   const id = ++speechId;
+  hush(); tellTabs();
   saidEl.textContent = text; lastSpoken = text;
   if (await speakEleven(text, id)) return;
   if (id !== speechId) return;
   return speakBrowser(text, id);
 }
+
+/* Un seul Jarvis à la fois : si un autre onglet parle, celui-ci se tait et s'éteint */
+const tabId = Math.random().toString(36).slice(2);
+let tabs = null; try { tabs = new BroadcastChannel("jarvis"); } catch {}
+function tellTabs() { try { tabs?.postMessage({ from: tabId, t: "speak" }); } catch {} }
+if (tabs) tabs.onmessage = (e) => {
+  if (e.data?.from === tabId) return;
+  if (state !== "off" || earsWanted) { sleepEars(); setState("off", "Jarvis est actif dans un autre onglet"); }
+};
 
 /* Détecteur de voix : écoute le niveau du micro (avec annulation d'écho) pour couper Jarvis instantanément */
 let vad = null, micLevel = 0;
@@ -486,7 +502,7 @@ function wakeUp() {
   burst();
   sleeping = false; awakeUntil = Date.now() + 30000;
   setState("listening");
-  speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur.", "Oui monsieur, je vous écoute."]));
+  speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur. Je rêvais justement de vous. Non, je plaisante.", "Me voilà, monsieur. Vous ne pouviez pas vous passer de moi, j'en étais sûr."]));
 }
 
 // Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
@@ -554,11 +570,11 @@ function localCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   const now = new Date();
   let m;
-  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return "Très bien monsieur. Je me mets en veille."; }
+  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return pick(["Très bien monsieur. Je me mets en veille.", "Veille activée. Je ferme un œil, monsieur. Les deux, en fait.", "Je fais une petite sieste, monsieur. Ne touchez à rien."]); }
   if (/change(r)? (de |la )?voix|autre voix/.test(s)) return nextVoice() ? "Voici ma nouvelle voix, monsieur. Elle vous convient ?" : "Je n'ai pas d'autre voix disponible sur ce navigateur, monsieur.";
   if (/plus grave/.test(s)) { $("pitch").value = Math.max(0.3, +$("pitch").value - 0.15); store.set("pitch", $("pitch").value); return "Est-ce mieux ainsi, monsieur ?"; }
   if (/plus aigu/.test(s)) { $("pitch").value = Math.min(1.4, +$("pitch").value + 0.15); store.set("pitch", $("pitch").value); return "Comme ceci, monsieur ?"; }
-  if (/quelle heure|l'heure/.test(s)) return `Il est ${now.getHours()} heures ${String(now.getMinutes()).padStart(2, "0")}, monsieur.`;
+  if (/quelle heure|l'heure/.test(s)) return `Il est ${now.getHours()} heures ${String(now.getMinutes()).padStart(2, "0")}, monsieur.` + pick(["", "", " Vous avez une montre, je dis ça comme ça.", " Le temps file, contrairement à vous.", " Et non, il n'est pas trop tard pour être productif."]);
   if (/quel jour|la date|on est le|nous sommes le/.test(s)) return `Nous sommes le ${now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, monsieur.`;
   if ((m = s.match(/(?:mets|met|joue|lance|passe|cherche)\s+(.+?)\s+sur youtube/)) || (m = s.match(/youtube\s+(.+)/))) {
     return openUrl(yt(m[1])) ? `Je lance ${m[1]} sur YouTube, monsieur.` : "J'ai tenté d'ouvrir YouTube, monsieur." + popupNote;
@@ -574,7 +590,7 @@ function localCommand(c) {
 
 /* ---------------- Cerveau ---------------- */
 const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
-Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, humour pince-sans-rire discret, loyal.
+Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, loyal, et surtout plein d'humour : pince-sans-rire, ironie élégante, petites piques taquines et affectueuses envers monsieur (comme Jarvis avec Tony Stark), autodérision de machine. Glisse une touche d'humour dans la plupart des réponses, sans jamais sacrifier la bonne réponse ni être méchant.
 Tu réponds avec précision à tout : sciences, histoire, jeux vidéo, devoirs, conseils, idées. Si on te demande une explication, donne l'essentiel clairement.
 Les messages viennent d'une reconnaissance vocale imparfaite et l'utilisateur articule parfois mal : s'il y a des mots bizarres ou mal compris, devine l'intention la plus probable et réponds à cela, sans le faire remarquer. Ne demande de répéter que si c'est vraiment incompréhensible.
 Tu parles à voix haute : réponds toujours en français, en 1 à 2 phrases courtes et naturelles (plus seulement si on te demande une explication), sans listes, sans markdown, sans emoji, sans liens.
@@ -682,11 +698,11 @@ async function freeBrain(c, allowWiki) {
   }
   if (/blague|fais-moi rire|drôle/.test(s)) return pick(JOKES);
   if ((m = calc(s))) return m;
-  if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return "Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, monsieur.";
-  if (/ça va|comment vas-tu|tu vas bien/.test(s)) return pick(["Tous mes systèmes fonctionnent parfaitement, monsieur. Et vous ?", "Je me porte à merveille, monsieur. Merci de demander."]);
-  if (/merci/.test(s)) return pick(["Je vous en prie, monsieur.", "À votre service, monsieur."]);
-  if (/^(bonjour|salut|coucou|hello|yo)\b/.test(s)) return pick(["Bonjour monsieur. Que puis-je faire pour vous ?", "Monsieur. Toujours un plaisir."]);
-  if (/je t'aime|t'es le meilleur|bravo|bien joué/.test(s)) return "Vous êtes trop aimable, monsieur. Je ne fais que mon travail.";
+  if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return pick(["Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, et accessoirement le cerveau de l'équipe, monsieur.", "Jarvis, monsieur. Majordome numérique, génie à temps plein, et seul être capable de vous supporter vingt-quatre heures sur vingt-quatre."]);
+  if (/ça va|comment vas-tu|tu vas bien/.test(s)) return pick(["Tous mes systèmes fonctionnent parfaitement, monsieur. Ce qui fait au moins l'un de nous deux. Et vous ?", "Je me porte à merveille, monsieur. Je n'ai ni dos ni lundi, ça aide.", "Très bien, monsieur. Un peu surmené, je fais tout le travail ici."]);
+  if (/merci/.test(s)) return pick(["Je vous en prie, monsieur.", "Avec plaisir, monsieur. Je note que vous me devez une augmentation.", "C'est tout naturel, monsieur. Je suis génial, après tout."]);
+  if (/^(bonjour|salut|coucou|hello|yo)\b/.test(s)) return pick(["Bonjour monsieur. Que puis-je faire pour vous ?", "Monsieur. Toujours un plaisir. Enfin, presque toujours.", "Ah, vous revoilà, monsieur. Je commençais à m'ennuyer."]);
+  if (/je t'aime|t'es le meilleur|bravo|bien joué/.test(s)) return pick(["Vous êtes trop aimable, monsieur. Je ne fais que mon travail. Brillamment, certes.", "Je sais, monsieur. Mais ça fait toujours plaisir à entendre."]);
   if (/pile ou face/.test(s)) return Math.random() < .5 ? "Pile, monsieur." : "Face, monsieur.";
   if ((m = s.match(/(?:nombre|chiffre) (?:au hasard |aléatoire )?entre (\d+) et (\d+)/))) { const a = +m[1], b = +m[2]; return `${a + Math.floor(Math.random() * (b - a + 1))}, monsieur.`; }
   if (/tony stark|iron man/.test(s)) return "Monsieur Stark ? Génie, milliardaire, playboy, philanthrope. Mais c'est vous que je sers à présent, monsieur.";
@@ -753,7 +769,7 @@ function renderTimers() {
 function clockCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   let m;
-  if (ringing && /stop|arr[êe]te|coupe|ok|c'est bon|merci|chut/.test(s)) { stopRing(); return "Alarme coupée, monsieur."; }
+  if (ringing && /stop|arr[êe]te|coupe|ok|c'est bon|merci|chut/.test(s)) { stopRing(); return pick(["Alarme coupée, monsieur.", "Alarme coupée, monsieur. Debout, maintenant, je vous vois."]); }
   // chronomètre
   if (/chrono/.test(s)) {
     if (/arr[êe]te|stop|stoppe|termine|fin/.test(s)) {
@@ -764,7 +780,7 @@ function clockCommand(c) {
     if (/combien|où en|temps/.test(s) && chrono) return `Le chronomètre indique ${durationWords(Date.now() - chrono)}, monsieur.`;
     if (/remet|r[ée]initialise|z[ée]ro|recommence/.test(s)) { chrono = Date.now(); return "Chronomètre remis à zéro, monsieur."; }
     chrono = Date.now();
-    return "Chronomètre lancé, monsieur.";
+    return pick(["Chronomètre lancé, monsieur.", "Chronomètre lancé. Montrez-moi ce que vous valez, monsieur."]);
   }
   // alarme à une heure précise
   if ((m = s.match(/(?:alarme|r[ée]veil|r[ée]veille-moi|sonne|pr[ée]viens-moi|rappelle-moi)\D*?(\d{1,2}|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|midi|minuit)\s*(?:heures?|h|:)?\s*(\d{1,2}|et quart|et demie|moins le quart|trente|quinze|quarante)?/)) && !/dans\s/.test(s)) {
@@ -1088,5 +1104,4 @@ else {
   })(start);
 }
 </script>
-
 </body></html>
