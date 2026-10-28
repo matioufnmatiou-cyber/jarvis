@@ -1,0 +1,402 @@
+<!doctype html>
+<html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>body{margin:0}[hidden]{display:none!important}</style></head><body>
+<title>J.A.R.V.I.S.</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap">
+<style>
+/* Layout: voice-only HUD. One reactor in the middle you tap to wake Jarvis, live caption under it, settings tucked behind a gear. Single dark look on purpose. */
+:root {
+  --bg: #050b14;
+  --panel: #0a1626;
+  --line: #17324d;
+  --fg: #d6ecff;
+  --muted: #7d9ab5;
+  --cyan: #4fd8ff;
+  --gold: #ffb84d;
+  --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { height: 100%; }
+body {
+  background: radial-gradient(ellipse at 50% 40%, #0c2238 0%, var(--bg) 65%) fixed, var(--bg);
+  color: var(--fg);
+  font-family: var(--display);
+  overflow: hidden;
+}
+.app {
+  height: 100%; box-sizing: border-box;
+  display: grid; grid-template-rows: auto 1fr auto; justify-items: center;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 16px;
+}
+header { width: 100%; max-width: 760px; display: flex; justify-content: space-between; align-items: center; }
+h1 { font-weight: 600; letter-spacing: .32em; font-size: 20px; margin: 0; color: var(--cyan); }
+#gear { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
+.stage { display: grid; place-items: center; align-content: center; gap: 18px; width: 100%; max-width: 640px; min-height: 0; }
+#core { background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
+#core:focus-visible, #gear:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
+canvas { width: min(70vw, 300px); height: min(70vw, 300px); display: block; }
+#status { font-family: var(--mono); font-size: 13px; letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); text-align: center; }
+#status.warn { color: var(--gold); }
+#heard, #said { text-align: center; line-height: 1.5; max-width: 34em; min-height: 1.5em; overflow-wrap: anywhere; }
+#heard { color: var(--muted); font-size: 15px; font-style: italic; }
+#said { color: var(--fg); font-size: 18px; }
+#meter { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); width: min(70vw, 260px); }
+#meter .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
+#level { height: 100%; width: 0; background: var(--cyan); transition: width .08s linear; }
+#help { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; max-width: 40em; line-height: 1.6; }
+#dl { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--gold); font-size: 14px; max-width: 32em; line-height: 1.5; }
+.btn { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; background: var(--cyan); color: var(--bg); border: 0; border-radius: 8px; padding: 11px 16px; cursor: pointer; font-size: 13px; }
+dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; width: min(92vw, 440px); box-sizing: border-box; padding: 20px; }
+dialog::backdrop { background: rgba(0, 0, 0, .6); }
+dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var(--cyan); }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
+.field input, .field select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 9px; font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
+.field small { font-family: var(--mono); font-size: 11px; line-height: 1.5; }
+.row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
+.ghost { background: transparent; color: var(--cyan); border: 1px solid var(--cyan); }
+@media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="app">
+  <header>
+    <h1>J.A.R.V.I.S.</h1>
+    <button id="gear" type="button">Réglages</button>
+  </header>
+
+  <main class="stage">
+    <button id="core" type="button" aria-label="Activer Jarvis"><canvas id="reactor" width="600" height="600"></canvas></button>
+    <div id="status">Touchez le réacteur pour me réveiller</div>
+    <div id="meter" hidden><span>Micro</span><div class="bar"><div id="level"></div></div></div>
+    <div id="heard"></div>
+    <div id="said"></div>
+    <div id="dl" hidden>
+      <span>Ici le micro est bloqué. Téléchargez Jarvis et ouvrez le fichier dans Chrome ou Edge : là il vous entendra.</span>
+      <button class="btn" id="dlBtn" type="button">Télécharger Jarvis</button>
+    </div>
+  </main>
+
+  <div id="help">Dites « Jarvis » puis votre ordre. Exemples : « Jarvis, mets AC/DC sur YouTube », « Jarvis, quelle heure est-il », « Jarvis, change de voix », « Jarvis, plus grave », « Jarvis, en veille ».</div>
+</div>
+
+<dialog id="settings">
+  <h2>RÉGLAGES</h2>
+  <div class="field">
+    <label for="mic">Micro</label>
+    <select id="mic"><option value="">Micro par défaut</option></select>
+    <small>Parlez : la barre « Micro » sous le réacteur doit bouger. Si elle ne bouge pas, essayez un autre micro de la liste.</small>
+  </div>
+  <div class="field">
+    <label for="voice">Voix de Jarvis</label>
+    <select id="voice"></select>
+    <small>Les plus belles voix sont dans Microsoft Edge (voix « Online Natural »).</small>
+  </div>
+  <div class="field">
+    <label for="pitch">Grave ↔ aigu</label>
+    <input id="pitch" type="range" min="0.3" max="1.4" step="0.05" value="0.75">
+  </div>
+  <div class="field" id="keyField">
+    <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
+    <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
+    <small>Facultatif. Sans clé, Jarvis comprend les ordres simples (YouTube, Google, ouvrir un site, l'heure, la date). La clé reste dans votre navigateur.</small>
+  </div>
+  <div class="row">
+    <button class="btn ghost" id="test" type="button">Tester la voix</button>
+    <button class="btn" id="close" type="button">OK</button>
+  </div>
+</dialog>
+
+<script>
+const $ = (id) => document.getElementById(id);
+const statusEl = $("status"), heardEl = $("heard"), saidEl = $("said");
+const inArtifact = !!(window.claude && window.claude.use);
+const store = {
+  get(k, d) { try { const v = localStorage.getItem("jarvis." + k); return v == null ? d : v; } catch { return d; } },
+  set(k, v) { try { localStorage.setItem("jarvis." + k, v); } catch {} },
+};
+
+let state = "off";          // off | idle | listening | thinking | speaking
+let awakeUntil = 0;         // après une réponse, Jarvis écoute sans le mot "Jarvis" pendant 20 s
+const history = [];
+
+function setState(s, label) {
+  state = s; statusEl.className = "";
+  statusEl.textContent = label || {
+    off: "Touchez le réacteur pour me réveiller", idle: "Dites « Jarvis »…",
+    listening: "Je vous écoute, monsieur", thinking: "Analyse en cours…", speaking: "",
+  }[s];
+}
+function warn(t) { statusEl.textContent = t; statusEl.className = "warn"; }
+
+/* ---------------- Voix ---------------- */
+const PREFERRED = [/Remy.*Multilingual/i, /Henri.*Natural/i, /Remy/i, /Henri/i, /Paul/i, /Thomas/i, /Mathieu/i, /Claude/i, /Ryan/i, /Daniel/i, /George/i];
+const FEMALE = /Denise|Eloise|Vivienne|Julie|Hortense|Amelie|Am[ée]lie|Audrey|Marie|Aurelie|C[ée]line|Sonia|Libby|Google français/i;
+let voices = [], pool = [];
+function loadVoices() {
+  voices = speechSynthesis.getVoices();
+  const fr = voices.filter((v) => /^fr/i.test(v.lang));
+  const male = voices.filter((v) => (/^fr/i.test(v.lang) || /^en-GB/i.test(v.lang)) && !FEMALE.test(v.name));
+  pool = PREFERRED.flatMap((re) => male.filter((v) => re.test(v.name)));
+  pool = [...new Set([...pool, ...male, ...fr])];
+  const sel = $("voice"); sel.innerHTML = "";
+  pool.forEach((v) => { const o = document.createElement("option"); o.value = v.name; o.textContent = `${v.name} (${v.lang})`; sel.append(o); });
+  const saved = store.get("voice", "");
+  sel.value = pool.some((v) => v.name === saved) ? saved : (pool[0]?.name || "");
+}
+if ("speechSynthesis" in window) { loadVoices(); speechSynthesis.onvoiceschanged = loadVoices; }
+$("voice").onchange = () => store.set("voice", $("voice").value);
+$("pitch").value = store.get("pitch", "0.75");
+$("pitch").oninput = () => store.set("pitch", $("pitch").value);
+
+function currentVoice() { return voices.find((v) => v.name === $("voice").value); }
+function speak(text) {
+  saidEl.textContent = text;
+  return new Promise((resolve) => {
+    if (!("speechSynthesis" in window)) return resolve();
+    pauseEars();
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(text);
+    const v = currentVoice();
+    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fr-FR";
+    u.pitch = parseFloat($("pitch").value); u.rate = 1.0;
+    u.onstart = () => setState("speaking");
+    // Filet de sécurité : si le navigateur ne signale jamais la fin, Jarvis se remet quand même à écouter
+    let done = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); resolve(); resumeEars(); };
+    const guard = setTimeout(finish, 3000 + text.length * 90);
+    u.onend = u.onerror = finish;
+    speechSynthesis.speak(u);
+  });
+}
+function nextVoice() {
+  if (!pool.length) return false;
+  const i = pool.findIndex((v) => v.name === $("voice").value);
+  $("voice").value = pool[(i + 1) % pool.length].name; store.set("voice", $("voice").value);
+  return true;
+}
+
+/* ---------------- Oreilles (écoute continue) ---------------- */
+const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+let rec = null, earsWanted = false, earsPaused = false, micBlocked = false;
+
+function startEars() {
+  if (!SR) { warn("Ce navigateur ne sait pas écouter. Ouvrez Jarvis dans Chrome ou Edge."); return; }
+  earsWanted = true;
+  if (rec || earsPaused) return;
+  const me = new SR(); rec = me; rec.lang = "fr-FR"; rec.continuous = true; rec.interimResults = true;
+  rec.onresult = (e) => {
+    let interim = "";
+    for (let i = e.resultIndex; i < e.results.length; i++) {
+      const t = e.results[i][0].transcript;
+      if (e.results[i].isFinal) handleHeard(t.trim()); else interim += t;
+    }
+    if (interim) { heardEl.textContent = "J'entends : « " + interim + " »"; lastHeard = Date.now(); }
+  };
+  rec.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
+      micBlocked = true; earsWanted = false; if (rec === me) rec = null;
+      if (inArtifact) { $("dl").hidden = false; setState("off", "Micro bloqué sur cette page"); }
+      else if (e.error === "audio-capture") warn("Aucun micro trouvé. Branchez un micro ou vérifiez qu'il est activé dans Windows.");
+      else warn("Micro refusé. Cliquez sur l'icône micro ou cadenas dans la barre d'adresse, choisissez Autoriser, puis rechargez.");
+    } else if (e.error === "network") {
+      warn("La reconnaissance vocale a besoin d'internet. Vérifiez la connexion, ou essayez Chrome.");
+    } else if (e.error !== "no-speech" && e.error !== "aborted") {
+      warn("Erreur d'écoute : " + e.error);
+    }
+  };
+  rec.onend = () => { if (rec === me) rec = null; if (earsWanted && !earsPaused && !micBlocked) setTimeout(startEars, 250); };
+  // Les navigateurs récents acceptent le micro choisi dans les réglages ; sinon c'est le micro par défaut
+  const track = micStream?.getAudioTracks()[0];
+  try { track && track.readyState === "live" ? rec.start(track) : rec.start(); }
+  catch { try { rec.start(); } catch { rec = null; } }
+  if (rec && state === "off") setState("idle");
+}
+
+/* Micro choisi + témoin : la barre bouge quand le micro capte du son */
+let micStream = null, lastHeard = 0, wokeAt = 0, ac = null, an = null;
+async function openMic() {
+  if (!navigator.mediaDevices?.getUserMedia) return;
+  const id = store.get("mic", "");
+  try {
+    micStream?.getTracks().forEach((t) => t.stop());
+    micStream = await navigator.mediaDevices.getUserMedia({ audio: id ? { deviceId: { exact: id } } : true });
+  } catch {
+    try { micStream = await navigator.mediaDevices.getUserMedia({ audio: true }); } catch { micStream = null; return; }
+  }
+  ac ??= new (window.AudioContext || window.webkitAudioContext)();
+  an ??= Object.assign(ac.createAnalyser(), { fftSize: 512 });
+  ac.createMediaStreamSource(micStream).connect(an);
+  $("meter").hidden = false;
+  listMics();
+}
+const meterBuf = new Uint8Array(512);
+(function tick() {
+  if (an) {
+    an.getByteTimeDomainData(meterBuf);
+    let peak = 0; for (const v of meterBuf) peak = Math.max(peak, Math.abs(v - 128));
+    $("level").style.width = Math.min(100, peak * 1.6) + "%";
+  }
+  requestAnimationFrame(tick);
+})();
+async function listMics() {
+  if (!navigator.mediaDevices?.enumerateDevices) return;
+  const mics = (await navigator.mediaDevices.enumerateDevices()).filter((d) => d.kind === "audioinput");
+  const sel = $("mic"), cur = micStream?.getAudioTracks()[0]?.getSettings().deviceId || store.get("mic", "");
+  sel.innerHTML = "";
+  mics.forEach((d, i) => { const o = document.createElement("option"); o.value = d.deviceId; o.textContent = d.label || "Micro " + (i + 1); sel.append(o); });
+  if (mics.some((d) => d.deviceId === cur)) sel.value = cur;
+}
+$("mic").onchange = async () => {
+  store.set("mic", $("mic").value);
+  await openMic();
+  if (earsWanted) { pauseEars(); earsPaused = false; startEars(); }
+};
+function pauseEars() { earsPaused = true; try { rec && rec.abort(); } catch {} rec = null; }
+function resumeEars() { earsPaused = false; if (earsWanted) startEars(); if (state !== "off") setState(Date.now() < awakeUntil ? "listening" : "idle"); }
+function sleepEars() { earsWanted = false; pauseEars(); earsPaused = false; setState("off"); }
+
+const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive)[\s,.!?]*/i;
+function handleHeard(text) {
+  if (!text || state === "thinking" || state === "speaking") return;
+  const hasWake = WAKE.test(text);
+  if (!hasWake && Date.now() > awakeUntil) { heardEl.textContent = "J'ai entendu « " + text + " ». Dites « Jarvis » avant votre ordre."; return; }
+  const cmd = text.replace(WAKE, "").trim();
+  heardEl.textContent = "« " + text + " »";
+  if (!cmd) { awakeUntil = Date.now() + 20000; speak("Oui monsieur ?"); return; }
+  obey(cmd);
+}
+
+/* ---------------- Actions ---------------- */
+function openUrl(url) {
+  const w = window.open(url, "_blank");
+  return !!w;
+}
+const yt = (q) => "https://www.youtube.com/results?search_query=" + encodeURIComponent(q);
+const gg = (q) => "https://www.google.com/search?q=" + encodeURIComponent(q);
+const SITES = { youtube: "https://www.youtube.com", google: "https://www.google.com", netflix: "https://www.netflix.com", gmail: "https://mail.google.com", spotify: "https://open.spotify.com", twitch: "https://www.twitch.tv", tiktok: "https://www.tiktok.com", instagram: "https://www.instagram.com", wikipedia: "https://fr.wikipedia.org", amazon: "https://www.amazon.fr", "google maps": "https://www.google.com/maps", maps: "https://www.google.com/maps", chatgpt: "https://chat.openai.com", discord: "https://discord.com/app", météo: "https://www.google.com/search?q=m%C3%A9t%C3%A9o" };
+const popupNote = " Si rien ne s'ouvre, autorisez les fenêtres pop-up pour Jarvis dans la barre d'adresse.";
+
+function localCommand(c) {
+  const s = c.toLowerCase().replace(/[.!?]$/, "");
+  const now = new Date();
+  let m;
+  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { setTimeout(sleepEars, 2500); return "Très bien monsieur. Je me mets en veille."; }
+  if (/change(r)? (de |la )?voix|autre voix/.test(s)) return nextVoice() ? "Voici ma nouvelle voix, monsieur. Elle vous convient ?" : "Je n'ai pas d'autre voix disponible sur ce navigateur, monsieur.";
+  if (/plus grave/.test(s)) { $("pitch").value = Math.max(0.3, +$("pitch").value - 0.15); store.set("pitch", $("pitch").value); return "Est-ce mieux ainsi, monsieur ?"; }
+  if (/plus aigu/.test(s)) { $("pitch").value = Math.min(1.4, +$("pitch").value + 0.15); store.set("pitch", $("pitch").value); return "Comme ceci, monsieur ?"; }
+  if (/quelle heure|l'heure/.test(s)) return `Il est ${now.getHours()} heures ${String(now.getMinutes()).padStart(2, "0")}, monsieur.`;
+  if (/quel jour|la date|on est le|nous sommes le/.test(s)) return `Nous sommes le ${now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, monsieur.`;
+  if ((m = s.match(/(?:mets|met|joue|lance|passe|cherche)\s+(.+?)\s+sur youtube/)) || (m = s.match(/youtube\s+(.+)/))) {
+    return openUrl(yt(m[1])) ? `Je lance ${m[1]} sur YouTube, monsieur.` : "J'ai tenté d'ouvrir YouTube, monsieur." + popupNote;
+  }
+  if ((m = s.match(/^(?:cherche|recherche|google)\s+(.+)/))) return openUrl(gg(m[1])) ? `Voici ce que j'ai trouvé sur ${m[1]}, monsieur.` : "J'ai tenté la recherche, monsieur." + popupNote;
+  if ((m = s.match(/^(?:ouvre|lance|va sur|affiche)\s+(.+)/))) {
+    const t = m[1].replace(/^(le site |le |la |l'|les )/, "").trim();
+    const url = SITES[t] || (/\.[a-z]{2,}$/.test(t) ? "https://" + t.replace(/\s/g, "") : null);
+    if (url) return openUrl(url) ? `J'ouvre ${t}, monsieur.` : `J'ai tenté d'ouvrir ${t}, monsieur.` + popupNote;
+  }
+  return null;
+}
+
+/* ---------------- Cerveau ---------------- */
+const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
+Personnalité : flegme britannique, poli, très compétent, humour pince-sans-rire discret, loyal.
+Tu parles à voix haute : réponds toujours en français, en 1 à 3 phrases courtes, sans listes, sans markdown, sans emoji.
+Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}.`;
+
+let samplePromise = null;
+async function askClaude(msgs) {
+  if (inArtifact) {
+    const sample = await (samplePromise ??= window.claude.use("sample"));
+    if (!sample) throw new Error("no-brain");
+    const first = { role: "user", content: SYSTEM() + "\n\nMessage de monsieur : " + msgs[0].content };
+    return (await sample([first, ...msgs.slice(1)], { cache: false, modelTier: "quick" })).text.trim();
+  }
+  const key = store.get("key", "");
+  if (!key) throw new Error("no-key");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
+    body: JSON.stringify({ model: "claude-sonnet-5-5", max_tokens: 300, system: SYSTEM(), messages: msgs }),
+  });
+  if (!r.ok) throw new Error("http-" + r.status);
+  const j = await r.json();
+  return j.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+}
+
+async function obey(cmd) {
+  setState("thinking");
+  let answer = localCommand(cmd);
+  if (!answer) {
+    history.push({ role: "user", content: cmd });
+    while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
+    try { answer = await askClaude(history); history.push({ role: "assistant", content: answer }); }
+    catch (e) {
+      history.pop();
+      answer = e.message === "no-key"
+        ? "Pour cette question il me faut ma clé d'accès, monsieur. Ajoutez-la dans les réglages."
+        : e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
+        : "Je n'arrive pas à joindre mon cerveau principal pour le moment, monsieur.";
+    }
+  }
+  awakeUntil = Date.now() + 30000;
+  await speak(answer);
+}
+// Si rien n'arrive 8 s après le réveil, on le dit au lieu de rester muet
+setInterval(() => {
+  if (earsWanted && !micBlocked && state !== "speaking" && state !== "thinking" && lastHeard < wokeAt && Date.now() - wokeAt > 8000 && !heardEl.textContent)
+    heardEl.textContent = "Je n'entends rien. Si la barre Micro ne bouge pas quand vous parlez, votre micro n'arrive pas jusqu'à moi.";
+}, 1000);
+
+/* ---------------- Interface ---------------- */
+$("core").onclick = () => {
+  wokeAt = Date.now(); heardEl.textContent = "";
+  if (micBlocked && inArtifact) return;
+  if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); (inArtifact ? Promise.resolve() : openMic()).then(() => { earsWanted = true; if (state !== "speaking") startEars(); }); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
+  else if (state === "speaking") { speechSynthesis.cancel(); }
+  else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
+};
+if (inArtifact) $("keyField").hidden = true;
+$("apikey").value = store.get("key", "");
+$("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("gear").onclick = () => { $("settings").showModal(); if (!inArtifact) (micStream ? listMics() : openMic()); };
+$("close").onclick = () => $("settings").close();
+$("test").onclick = () => speak("Bonjour monsieur. Je suis Jarvis, à votre service.");
+
+$("dlBtn").onclick = async () => {
+  try {
+    const downloads = await window.claude.use("downloads");
+    const html = await (await fetch("jarvis-local.html")).text();
+    if (!downloads) throw new Error();
+    await downloads.save({ filename: "jarvis.html", data: html });
+  } catch (e) { if (!e || e.code !== "declined") warn("Le téléchargement n'a pas marché ici."); }
+};
+
+/* ---------------- Réacteur ---------------- */
+const cv = $("reactor"), ctx = cv.getContext("2d");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let t = 0;
+function draw() {
+  const W = cv.width, c = W / 2; ctx.clearRect(0, 0, W, W);
+  const energy = { off: 0.1, idle: 0.3, listening: 1, thinking: 0.7, speaking: 0.9 }[state];
+  const color = state === "thinking" ? "255,184,77" : state === "off" ? "90,140,180" : "79,216,255";
+  const pulse = 1 + Math.sin(t * (2 + energy * 7)) * 0.07 * energy;
+  const g = ctx.createRadialGradient(c, c, 0, c, c, 120 * pulse);
+  g.addColorStop(0, "rgba(255,255,255,.95)"); g.addColorStop(0.3, `rgba(${color},.8)`); g.addColorStop(1, `rgba(${color},0)`);
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c, c, 120 * pulse, 0, Math.PI * 2); ctx.fill();
+  [[165, 18, 1], [215, 36, -0.6], [268, 60, 0.35]].forEach(([r, n, dir], k) => {
+    ctx.strokeStyle = `rgba(${color},${0.8 - k * 0.2})`; ctx.lineWidth = k === 0 ? 10 : 5;
+    for (let i = 0; i < n; i++) {
+      const a0 = (i / n) * Math.PI * 2 + t * dir * (0.3 + energy);
+      ctx.beginPath(); ctx.arc(c, c, r, a0, a0 + (Math.PI * 2 / n) * 0.6); ctx.stroke();
+    }
+  });
+  t += reduce ? 0 : 0.016;
+  requestAnimationFrame(draw);
+}
+draw();
+</script>
+
+</body></html>
