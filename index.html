@@ -305,7 +305,7 @@ function startEars() {
     lastHeard = Date.now();
     clearTimeout(silenceT);
     if (finals.length) { handleHeard(finals.join(" ").trim()); return; }
-    heardEl.textContent = "J'entends : « " + interim + " »";
+    if (!sleeping) heardEl.textContent = "J'entends : « " + interim + " »";
     // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
     silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 700);
   };
@@ -371,7 +371,20 @@ $("mic").onchange = async () => {
   await openMic();
 };
 function pauseEars() { earsPaused = true; try { rec && rec.abort(); } catch {} rec = null; }
-function sleepEars() { earsWanted = false; stopSpeaking(); pauseEars(); earsPaused = false; setState("off"); }
+function sleepEars() { sleeping = false; earsWanted = false; stopSpeaking(); pauseEars(); earsPaused = false; setState("off"); }
+
+/* Veille : Jarvis ne répond plus, mais garde une oreille ouverte pour « Jarvis, réveille-toi » */
+let sleeping = false, sleepAfterSpeech = false;
+function goSleep() {
+  stopSpeaking(); sleeping = true; earsWanted = true; startEars();
+  heardEl.textContent = ""; saidEl.textContent = "";
+  setState("off", "En veille · dites « Jarvis, réveille-toi »");
+}
+function wakeUp() {
+  sleeping = false; awakeUntil = Date.now() + 30000;
+  setState("listening");
+  speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur.", "Oui monsieur, je vous écoute."]));
+}
 
 // Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
 const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
@@ -387,6 +400,12 @@ const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive
 const needWake = () => store.get("wake", "0") === "1";
 function handleHeard(text) {
   if (!text || state === "thinking") return;
+  if (sleeping) {
+    if (ringing && /stop|arr[êe]te|coupe/i.test(text)) { stopRing(); return; }
+    const asksSleep = /en veille|dors/i.test(text) && !/plus en veille|sors|r[ée]veille/i.test(text);
+    if (WAKE.test(text) && !asksSleep) wakeUp();
+    return;
+  }
   const hasWake = WAKE.test(text);
   if (needWake() && !hasWake && Date.now() > awakeUntil) { heardEl.textContent = "J'ai entendu « " + text + " ». Dites « Jarvis » avant votre ordre."; return; }
   const cmd = text.replace(WAKE, "").trim();
@@ -409,7 +428,7 @@ function localCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   const now = new Date();
   let m;
-  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { setTimeout(sleepEars, 2500); return "Très bien monsieur. Je me mets en veille."; }
+  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return "Très bien monsieur. Je me mets en veille. Dites Jarvis, réveille-toi, quand vous aurez besoin de moi."; }
   if (/change(r)? (de |la )?voix|autre voix/.test(s)) return nextVoice() ? "Voici ma nouvelle voix, monsieur. Elle vous convient ?" : "Je n'ai pas d'autre voix disponible sur ce navigateur, monsieur.";
   if (/plus grave/.test(s)) { $("pitch").value = Math.max(0.3, +$("pitch").value - 0.15); store.set("pitch", $("pitch").value); return "Est-ce mieux ainsi, monsieur ?"; }
   if (/plus aigu/.test(s)) { $("pitch").value = Math.min(1.4, +$("pitch").value + 0.15); store.set("pitch", $("pitch").value); return "Comme ceci, monsieur ?"; }
@@ -667,6 +686,7 @@ async function obey(cmd) {
   }
   awakeUntil = Date.now() + 30000;
   await speak(answer);
+  if (sleepAfterSpeech) { sleepAfterSpeech = false; goSleep(); }
 }
 // Si rien n'arrive 8 s après le réveil, on le dit au lieu de rester muet
 setInterval(() => {
@@ -678,6 +698,7 @@ setInterval(() => {
 $("core").onclick = () => {
   wokeAt = Date.now(); heardEl.textContent = "";
   if (micBlocked && inArtifact) return;
+  if (sleeping) { wakeUp(); return; }
   if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
   else if (state === "speaking") { stopSpeaking(); }
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
@@ -712,7 +733,8 @@ function tickHud() {
   $("time").textContent = d.toLocaleTimeString("fr-FR", { hour12: false });
   $("date").textContent = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   $("coreState").textContent = STATE_LABEL[state] || "VEILLE";
-  $("core").classList.toggle("live", earsWanted);
+  $("core").classList.toggle("live", earsWanted && !sleeping);
+  if (sleeping) $("coreState").textContent = "VEILLE";
   checkTimers(); renderTimers();
 }
 setInterval(tickHud, 100); tickHud();
