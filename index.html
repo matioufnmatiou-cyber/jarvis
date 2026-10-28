@@ -216,33 +216,38 @@ $("pitch").oninput = () => store.set("pitch", $("pitch").value);
 
 function currentVoice() { return voices.find((v) => v.name === $("voice").value); }
 /* ---------------- Parole (interruptible) ---------------- */
-let elevenAudio = null, endSpeech = null, lastSpoken = "", spokeEnd = 0;
+let elevenAudio = null, endSpeech = null, lastSpoken = "", spokeEnd = 0, speechId = 0, keepUtt = null;
 function stopSpeaking() {
+  speechId++;
   speechSynthesis.cancel();
   if (elevenAudio) { elevenAudio.pause(); elevenAudio = null; }
   endSpeech?.();
+  if (state === "speaking") afterSpeech();
 }
-function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking") setState(earsWanted ? "listening" : "off"); }
+function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking" || state === "thinking") setState(sleeping ? "off" : earsWanted ? "listening" : "off"); }
 
 /* Voix ElevenLabs (facultative) : beaucoup plus réaliste ; sinon, voix du navigateur */
-async function speakEleven(text) {
+async function speakEleven(text, id) {
   const key = store.get("elKey", "");
   if (!key) return false;
   const voiceId = store.get("elVoice", "") || "onwK4e9ZLuTAKqWW03F9"; // "Daniel" : voix britannique posée
   try {
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 6000);
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
-      method: "POST",
+      method: "POST", signal: ctl.signal,
       headers: { "content-type": "application/json", "xi-api-key": key },
       body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }),   // modèle rapide : réponse quasi immédiate
     });
+    clearTimeout(to);
     if (!r.ok) throw new Error("ElevenLabs " + r.status);
     const url = URL.createObjectURL(await r.blob());
-    if (state !== "thinking" && state !== "speaking") { URL.revokeObjectURL(url); return true; } // interrompu entre-temps
+    if (id !== speechId) { URL.revokeObjectURL(url); return true; }   // interrompu entre-temps
     const audio = new Audio(url); elevenAudio = audio;
+    try { await audio.play(); } catch { URL.revokeObjectURL(url); elevenAudio = null; throw new Error("lecture bloquée"); }
     setState("speaking");
-    await new Promise((res) => { endSpeech = res; audio.onended = audio.onerror = res; audio.play().catch(res); });
+    await new Promise((res) => { endSpeech = res; audio.onended = audio.onerror = res; });
     URL.revokeObjectURL(url);
-    afterSpeech();
+    if (id === speechId) afterSpeech();
     return true;
   } catch (e) {
     $("srstate").textContent = "Voix ElevenLabs indisponible (" + e.message + "), voix du navigateur utilisée.";
@@ -250,25 +255,39 @@ async function speakEleven(text) {
   }
 }
 
-async function speak(text) {
-  saidEl.textContent = text; lastSpoken = text;
-  if (await speakEleven(text)) return;
+/* Voix du navigateur : phrase par phrase (démarre plus vite et évite les coupures de Chrome/Edge) */
+function speakBrowser(text, id) {
   return new Promise((resolve) => {
-    if (!("speechSynthesis" in window)) return resolve();
-    speechSynthesis.cancel();
-    const u = new SpeechSynthesisUtterance(text);
-    const v = currentVoice();
-    if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fr-FR";
-    u.pitch = parseFloat($("pitch").value); u.rate = 1.08;
-    setState("speaking");
-    // Filet de sécurité : si le navigateur ne signale jamais la fin, Jarvis se remet quand même à écouter
-    let done = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(guard); afterSpeech(); resolve(); };
-    const guard = setTimeout(finish, 3000 + text.length * 90);
+    if (!("speechSynthesis" in window) || id !== speechId) return resolve();
+    const parts = (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map((x) => x.trim()).filter(Boolean);
+    let i = 0, done = false, guard = null;
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (id === speechId) afterSpeech(); resolve(); };
     endSpeech = finish;
-    u.onend = u.onerror = finish;
-    speechSynthesis.speak(u);
+    const v = currentVoice(), pitch = parseFloat($("pitch").value);
+    const next = () => {
+      if (done) return;
+      if (i >= parts.length || id !== speechId) return finish();
+      const u = new SpeechSynthesisUtterance(parts[i++]);
+      keepUtt = u;                                          // garde une référence, sinon le navigateur peut l'oublier en route
+      if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fr-FR";
+      u.pitch = pitch; u.rate = 1.08;
+      clearTimeout(guard); guard = setTimeout(next, 2500 + u.text.length * 110);
+      u.onend = u.onerror = () => { clearTimeout(guard); next(); };
+      speechSynthesis.resume();
+      speechSynthesis.speak(u);
+    };
+    setState("speaking");
+    // Chrome/Edge avalent parfois une phrase lancée juste après un cancel : on laisse un court délai
+    if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); setTimeout(next, 80); } else next();
   });
+}
+
+async function speak(text) {
+  const id = ++speechId;
+  saidEl.textContent = text; lastSpoken = text;
+  if (await speakEleven(text, id)) return;
+  if (id !== speechId) return;
+  return speakBrowser(text, id);
 }
 function nextVoice() {
   if (!pool.length) return false;
@@ -305,7 +324,8 @@ function startEars() {
     lastHeard = Date.now();
     clearTimeout(silenceT);
     if (finals.length) { handleHeard(finals.join(" ").trim()); return; }
-    if (!sleeping) heardEl.textContent = "J'entends : « " + interim + " »";
+    if (sleeping) { if (WAKE_PHRASE.test(interim)) { clearTimeout(silenceT); try { me.abort(); } catch {} wakeUp(); } return; }
+    heardEl.textContent = "J'entends : « " + interim + " »";
     // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
     silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 700);
   };
@@ -396,6 +416,7 @@ function isEcho(text) {
 }
 
 const STOP_WORDS = /\b(stop|attends?|tais[- ]toi|chut|arr[êe]te|silence|dj?arvis|jarvi[sc]?e?)\b/i;
+const WAKE_PHRASE = /r[ée]veill?e[- ]?toi|r[ée]veil|sors de (la )?veille|plus en veille|debout|r[ée]active|allume[- ]toi/i;
 const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive)[\s,.!?]*/i;
 const needWake = () => store.get("wake", "0") === "1";
 function handleHeard(text) {
@@ -403,7 +424,7 @@ function handleHeard(text) {
   if (sleeping) {
     if (ringing && /stop|arr[êe]te|coupe/i.test(text)) { stopRing(); return; }
     const asksSleep = /en veille|dors/i.test(text) && !/plus en veille|sors|r[ée]veille/i.test(text);
-    if (WAKE.test(text) && !asksSleep) wakeUp();
+    if ((WAKE.test(text) || WAKE_PHRASE.test(text)) && !asksSleep) wakeUp();
     return;
   }
   const hasWake = WAKE.test(text);
@@ -456,7 +477,7 @@ Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeSt
 let samplePromise = null;
 /* IA gratuite sans clé (service public Pollinations) : sert de cerveau quand il n'y a pas de clé Anthropic */
 async function askFree(msgs) {
-  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 10000);
   try {
     const r = await fetch("https://text.pollinations.ai/openai", {
       method: "POST", signal: ctl.signal,
@@ -675,11 +696,14 @@ async function obey(cmd) {
   setState("thinking");
   let answer = clockCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
   if (!answer) {
+    // Si l'IA met du temps, Jarvis le dit au lieu de rester muet
+    const filler = setTimeout(() => { if (state === "thinking") speakBrowser(pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, 2500);
     history.push({ role: "user", content: cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
-    try { answer = await askClaude(history); history.push({ role: "assistant", content: answer }); }
+    try { answer = await askClaude(history); clearTimeout(filler); history.push({ role: "assistant", content: answer }); }
     catch (e) {
       history.pop();
+      clearTimeout(filler);
       answer = e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
         : (await freeBrain(cmd, true)) || "Je n'arrive pas à joindre mon cerveau principal pour le moment, monsieur. Réessayez dans un instant.";
     }
@@ -758,14 +782,14 @@ const cv = $("sphere"), ctx = cv.getContext("2d");
 const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
 let W = 0, H = 0, DPR = 1;
 function resize() {
-  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  DPR = Math.min(window.devicePixelRatio || 1, 1.5);
   W = cv.clientWidth; H = cv.clientHeight;
   cv.width = W * DPR; cv.height = H * DPR;
   ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
 }
 addEventListener("resize", resize); resize();
 
-const N = 1100, GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const N = 800, GOLDEN = Math.PI * (3 - Math.sqrt(5));
 const P = [];
 for (let i = 0; i < N; i++) {
   const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = GOLDEN * i;
@@ -782,7 +806,7 @@ for (let i = 0; i < N; i++) {
   let found = 0;
   for (let j = i + 1; j < N && found < 3; j++) {
     const p = P[i], q = P[j];
-    if (p.x * q.x + p.y * q.y + p.z * q.z > 0.9935) { LINKS.push(i, j); found++; }
+    if (p.x * q.x + p.y * q.y + p.z * q.z > 0.991) { LINKS.push(i, j); found++; }
   }
 }
 
