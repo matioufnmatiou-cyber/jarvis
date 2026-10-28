@@ -34,6 +34,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 #clock .side b { color: var(--cyan); font-weight: 400; }
 #time { font-family: var(--display); font-weight: 600; font-size: clamp(26px, 5vw, 40px); letter-spacing: .14em; color: var(--cyan); text-shadow: 0 0 12px rgba(56, 225, 255, .8); font-variant-numeric: tabular-nums; text-align: center; }
 #date { font-size: 10px; letter-spacing: .2em; color: var(--muted); text-align: center; text-transform: uppercase; }
+#timers { position: absolute; top: 108px; left: 50%; transform: translateX(-50%); padding: 6px 14px; font-size: 12px; letter-spacing: .12em; color: var(--gold); white-space: nowrap; font-variant-numeric: tabular-nums; max-width: calc(100vw - 32px); overflow: hidden; text-overflow: ellipsis; }
 #gear { position: absolute; top: 14px; right: max(16px, env(safe-area-inset-right, 0px)); padding: 6px 12px; font-size: 12px; letter-spacing: .14em; color: var(--cyan); }
 
 /* Bas : sous-titres + boutons */
@@ -89,6 +90,7 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <div><div id="time">00:00:00</div><div id="date"></div></div>
     <div class="side">NOYAU<br><b id="coreState">VEILLE</b></div>
   </div>
+  <div id="timers" class="glow" hidden></div>
 
   <button id="gear" class="glow intro" type="button">⚙ RÉGLAGES</button>
 
@@ -121,6 +123,8 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <li>« Jarvis, combien font 12 fois 8 ? » · « raconte une blague »</li>
     <li>« Jarvis, qui est Albert Einstein ? » · « c'est quoi un trou noir ? »</li>
     <li>« Jarvis, minuteur 5 minutes »</li>
+    <li>« Jarvis, mets une alarme à 16h » · « annule l'alarme »</li>
+    <li>« Jarvis, lance le chrono » · « arrête le chrono »</li>
     <li>« Jarvis, ouvre Netflix / Spotify / Discord… »</li>
     <li>« Jarvis, change de voix » · « plus grave » · « plus aigu »</li>
     <li>« Jarvis, en veille » pour l'arrêter</li>
@@ -486,7 +490,6 @@ const JOKES = [
 const WMO = { 0: "ciel dégagé", 1: "plutôt dégagé", 2: "partiellement nuageux", 3: "couvert", 45: "brouillard", 48: "brouillard givrant", 51: "bruine légère", 53: "bruine", 55: "forte bruine", 61: "pluie légère", 63: "pluie", 65: "forte pluie", 71: "neige légère", 73: "neige", 75: "forte neige", 80: "averses", 81: "averses", 82: "violentes averses", 95: "orages", 96: "orages avec grêle", 99: "orages avec grêle" };
 const NUM = { zéro: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, quinze: 15, vingt: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100, mille: 1000 };
 const say = (n) => String(Math.round(n * 1000) / 1000).replace(".", ",");
-let timer = null;
 
 async function weather(city) {
   const g = await (await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=fr&name=" + encodeURIComponent(city))).json();
@@ -531,12 +534,6 @@ async function freeBrain(c, allowWiki) {
     store.set("city", where);
     try { return await weather(where); } catch { return "Les satellites météo ne répondent pas, monsieur."; }
   }
-  if ((m = s.match(/(?:minuteur|timer|chrono|rappelle-moi dans|préviens-moi dans)\D*(\d+|un|une|deux|trois|cinq|dix|quinze|vingt|trente)\s*(seconde|minute|heure)/))) {
-    const n = +(NUM[m[1]] ?? m[1]), ms = n * { seconde: 1e3, minute: 6e4, heure: 36e5 }[m[2]];
-    clearTimeout(timer);
-    timer = setTimeout(() => speak(`Monsieur, votre minuteur de ${n} ${m[2]}${n > 1 ? "s" : ""} est terminé.`), ms);
-    return `Minuteur réglé sur ${n} ${m[2]}${n > 1 ? "s" : ""}, monsieur.`;
-  }
   if (/blague|fais-moi rire|drôle/.test(s)) return pick(JOKES);
   if ((m = calc(s))) return m;
   if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return "Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, monsieur.";
@@ -555,9 +552,109 @@ async function freeBrain(c, allowWiki) {
   return null;
 }
 
+/* ---------------- Chronomètre, minuteurs, alarmes ---------------- */
+let timers = [];                          // { kind: "alarme" | "minuteur", at: ms, label }
+try { timers = JSON.parse(store.get("timers", "[]")).filter((t) => t.at > Date.now()); } catch {}
+const saveTimers = () => store.set("timers", JSON.stringify(timers));
+let chrono = null;                        // ms de départ du chronomètre
+let ringing = null;                       // sonnerie en cours
+const plural = (n, w) => `${n} ${w}${n > 1 ? "s" : ""}`;
+function durationWords(ms) {
+  const t = Math.round(ms / 1000), h = Math.floor(t / 3600), m = Math.floor((t % 3600) / 60), sec = t % 60;
+  return [h && plural(h, "heure"), m && plural(m, "minute"), (sec || (!h && !m)) && plural(sec, "seconde")].filter(Boolean).join(" ");
+}
+const hhmm = (ms) => new Date(ms).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+const toNum = (w) => +(NUM[w] ?? w);
+
+function ring(text) {
+  stopRing();
+  const a = new (window.AudioContext || window.webkitAudioContext)();
+  let k = 0;
+  const beep = () => {           // trois bips façon HUD, répétés
+    for (let i = 0; i < 3; i++) {
+      const o = a.createOscillator(), g = a.createGain(), t0 = a.currentTime + i * 0.18;
+      o.type = "square"; o.frequency.value = 1320;
+      g.gain.setValueAtTime(0.0001, t0); g.gain.exponentialRampToValueAtTime(0.15, t0 + 0.02); g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.14);
+      o.connect(g).connect(a.destination); o.start(t0); o.stop(t0 + 0.15);
+    }
+    if (++k % 4 === 0) speak(text);
+  };
+  beep();
+  ringing = { a, iv: setInterval(beep, 1500), off: setTimeout(stopRing, 60000) };
+  heardEl.textContent = "⏰ " + text + " (dites « stop » ou touchez ■)";
+}
+function stopRing() {
+  if (!ringing) return false;
+  clearInterval(ringing.iv); clearTimeout(ringing.off); ringing.a.close();
+  ringing = null; return true;
+}
+function checkTimers() {
+  const now = Date.now(), due = timers.filter((t) => t.at <= now);
+  if (!due.length) return;
+  timers = timers.filter((t) => t.at > now); saveTimers();
+  const t = due[0];
+  ring(t.kind === "alarme" ? `Monsieur, il est ${hhmm(t.at)}. Votre alarme sonne.` : `Monsieur, votre minuteur de ${t.label} est terminé.`);
+}
+function renderTimers() {
+  const items = timers.slice().sort((a, b) => a.at - b.at).map((t) =>
+    t.kind === "alarme" ? `⏰ ALARME ${hhmm(t.at)}` : `⧗ ${new Date(t.at - Date.now()).toISOString().slice(11, 19)}`);
+  if (chrono) items.unshift(`⏱ CHRONO ${new Date(Date.now() - chrono).toISOString().slice(11, 21)}`);
+  const el = $("timers");
+  el.hidden = !items.length;
+  el.textContent = items.join("   ·   ");
+}
+
+function clockCommand(c) {
+  const s = c.toLowerCase().replace(/[.!?]$/, "");
+  let m;
+  if (ringing && /stop|arr[êe]te|coupe|ok|c'est bon|merci|chut/.test(s)) { stopRing(); return "Alarme coupée, monsieur."; }
+  // chronomètre
+  if (/chrono/.test(s)) {
+    if (/arr[êe]te|stop|stoppe|termine|fin/.test(s)) {
+      if (!chrono) return "Aucun chronomètre en cours, monsieur.";
+      const d = Date.now() - chrono; chrono = null;
+      return `Chronomètre arrêté à ${durationWords(d)}, monsieur.`;
+    }
+    if (/combien|où en|temps/.test(s) && chrono) return `Le chronomètre indique ${durationWords(Date.now() - chrono)}, monsieur.`;
+    if (/remet|r[ée]initialise|z[ée]ro|recommence/.test(s)) { chrono = Date.now(); return "Chronomètre remis à zéro, monsieur."; }
+    chrono = Date.now();
+    return "Chronomètre lancé, monsieur.";
+  }
+  // alarme à une heure précise
+  if ((m = s.match(/(?:alarme|r[ée]veil|r[ée]veille-moi|sonne|pr[ée]viens-moi|rappelle-moi)\D*?(\d{1,2}|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|midi|minuit)\s*(?:heures?|h|:)?\s*(\d{1,2}|et quart|et demie|moins le quart|trente|quinze|quarante)?/)) && !/dans\s/.test(s)) {
+    let h = m[1] === "midi" ? 12 : m[1] === "minuit" ? 0 : toNum(m[1]);
+    let mn = 0; const x = m[2] || "";
+    if (/^\d+$/.test(x)) mn = +x; else if (/quart$/.test(x) && !/moins/.test(x)) mn = 15; else if (/demie|trente/.test(x)) mn = 30; else if (/moins le quart/.test(x)) { mn = 45; h -= 1; } else if (x) mn = toNum(x) || 0;
+    if (/(après-midi|du soir|ce soir)/.test(s) && h < 12) h += 12;
+    if (isNaN(h) || h > 23 || mn > 59) return null;
+    const at = new Date(); at.setHours(h, mn, 0, 0);
+    if (at.getTime() <= Date.now()) at.setDate(at.getDate() + 1);
+    timers.push({ kind: "alarme", at: at.getTime(), label: hhmm(at) }); saveTimers();
+    const tomorrow = at.getDate() !== new Date().getDate();
+    return `Alarme réglée pour ${h} heures${mn ? " " + String(mn).padStart(2, "0") : ""}${tomorrow ? " demain" : ""}, monsieur. Gardez cette page ouverte.`;
+  }
+  // minuteur
+  if ((m = s.match(/(?:minuteur|timer|compte [àa] rebours|rappelle-moi dans|pr[ée]viens-moi dans|alarme dans|sonne dans)\D*?(\d+|une?|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|quinze|vingt|trente|quarante|cinquante|soixante)\s*(seconde|minute|heure|min|sec)/))) {
+    const unit = { seconde: "seconde", sec: "seconde", minute: "minute", min: "minute", heure: "heure" }[m[2]];
+    const n = toNum(m[1]), ms = n * { seconde: 1e3, minute: 6e4, heure: 36e5 }[unit];
+    timers.push({ kind: "minuteur", at: Date.now() + ms, label: plural(n, unit) }); saveTimers();
+    return `Minuteur réglé sur ${plural(n, unit)}, monsieur.`;
+  }
+  if (/(annule|supprime|enl[èe]ve|arr[êe]te).*(alarme|minuteur|r[ée]veil)/.test(s)) {
+    const kind = /minuteur/.test(s) ? "minuteur" : "alarme", before = timers.length;
+    timers = timers.filter((t) => t.kind !== kind); saveTimers();
+    return before === timers.length ? `Aucun ${kind} en cours, monsieur.` : `${kind === "alarme" ? "Alarmes annulées" : "Minuteurs annulés"}, monsieur.`;
+  }
+  if (/(quelles?|mes) (alarmes?|minuteurs?)/.test(s)) {
+    if (!timers.length) return "Aucune alarme ni minuteur en cours, monsieur.";
+    return timers.map((t) => t.kind === "alarme" ? `une alarme à ${hhmm(t.at)}` : `un minuteur qui sonne dans ${durationWords(t.at - Date.now())}`).join(", ") + ", monsieur.";
+  }
+  return null;
+}
+
 async function obey(cmd) {
   setState("thinking");
-  let answer = localCommand(cmd) || await freeBrain(cmd, false);
+  let answer = clockCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
   if (!answer) {
     history.push({ role: "user", content: cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
@@ -616,8 +713,9 @@ function tickHud() {
   $("date").textContent = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
   $("coreState").textContent = STATE_LABEL[state] || "VEILLE";
   $("core").classList.toggle("live", earsWanted);
+  checkTimers(); renderTimers();
 }
-setInterval(tickHud, 250); tickHud();
+setInterval(tickHud, 100); tickHud();
 
 // Un clic n'importe où sur la sphère, ou la barre espace, le fait taire
 $("sphere").addEventListener("click", () => { if (state === "speaking") stopSpeaking(); });
@@ -628,6 +726,7 @@ addEventListener("keydown", (e) => {
   }
 });
 $("stop").onclick = () => {
+  if (stopRing()) return;
   if (state === "speaking") stopSpeaking();
   else { sleepEars(); saidEl.textContent = ""; heardEl.textContent = ""; }
 };
