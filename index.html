@@ -43,9 +43,10 @@ canvas { width: min(70vw, 300px); height: min(70vw, 300px); display: block; }
 #heard, #said { text-align: center; line-height: 1.5; max-width: 34em; min-height: 1.5em; overflow-wrap: anywhere; }
 #heard { color: var(--muted); font-size: 15px; font-style: italic; }
 #said { color: var(--fg); font-size: 18px; }
-#meter { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); width: min(70vw, 260px); }
+#meter { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); width: 100%; }
 #meter .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
 #level { height: 100%; width: 0; background: var(--cyan); transition: width .08s linear; }
+#srstate { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--muted); min-height: 1.2em; }
 #help { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; max-width: 40em; line-height: 1.6; }
 #dl { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--gold); font-size: 14px; max-width: 32em; line-height: 1.5; }
 .btn { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; background: var(--cyan); color: var(--bg); border: 0; border-radius: 8px; padding: 11px 16px; cursor: pointer; font-size: 13px; }
@@ -69,7 +70,7 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var
   <main class="stage">
     <button id="core" type="button" aria-label="Activer Jarvis"><canvas id="reactor" width="600" height="600"></canvas></button>
     <div id="status">Touchez le réacteur pour me réveiller</div>
-    <div id="meter" hidden><span>Micro</span><div class="bar"><div id="level"></div></div></div>
+    <div id="srstate"></div>
     <div id="heard"></div>
     <div id="said"></div>
     <div id="dl" hidden>
@@ -86,7 +87,8 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var
   <div class="field">
     <label for="mic">Micro</label>
     <select id="mic"><option value="">Micro par défaut</option></select>
-    <small>Parlez : la barre « Micro » sous le réacteur doit bouger. Si elle ne bouge pas, essayez un autre micro de la liste.</small>
+    <div id="meter" hidden><span>Niveau</span><div class="bar"><div id="level"></div></div></div>
+    <small>Parlez : la barre doit bouger. Choisissez aussi ce micro dans les paramètres du navigateur (edge://settings/content/microphone ou chrome://settings/content/microphone), car c'est celui-là que Jarvis utilise pour comprendre les mots.</small>
   </div>
   <div class="field">
     <label for="voice">Voix de Jarvis</label>
@@ -195,6 +197,7 @@ function startEars() {
     if (interim) { heardEl.textContent = "J'entends : « " + interim + " »"; lastHeard = Date.now(); }
   };
   rec.onerror = (e) => {
+    sr("Erreur : " + e.error);
     if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
       micBlocked = true; earsWanted = false; if (rec === me) rec = null;
       if (inArtifact) { $("dl").hidden = false; setState("off", "Micro bloqué sur cette page"); }
@@ -208,11 +211,13 @@ function startEars() {
   };
   rec.onend = () => { if (rec === me) rec = null; if (earsWanted && !earsPaused && !micBlocked) setTimeout(startEars, 250); };
   // Les navigateurs récents acceptent le micro choisi dans les réglages ; sinon c'est le micro par défaut
-  const track = micStream?.getAudioTracks()[0];
-  try { track && track.readyState === "live" ? rec.start(track) : rec.start(); }
-  catch { try { rec.start(); } catch { rec = null; } }
+  rec.onaudiostart = () => sr("Écoute active");
+  rec.onspeechstart = () => sr("Voix détectée…");
+  try { rec.start(); } catch (e) { sr("Écoute impossible : " + e.message); rec = null; }
   if (rec && state === "off") setState("idle");
 }
+
+function sr(t) { $("srstate").textContent = "Reconnaissance vocale : " + t; }
 
 /* Micro choisi + témoin : la barre bouge quand le micro capte du son */
 let micStream = null, lastHeard = 0, wokeAt = 0, ac = null, an = null;
@@ -251,7 +256,6 @@ async function listMics() {
 $("mic").onchange = async () => {
   store.set("mic", $("mic").value);
   await openMic();
-  if (earsWanted) { pauseEars(); earsPaused = false; startEars(); }
 };
 function pauseEars() { earsPaused = true; try { rec && rec.abort(); } catch {} rec = null; }
 function resumeEars() { earsPaused = false; if (earsWanted) startEars(); if (state !== "off") setState(Date.now() < awakeUntil ? "listening" : "idle"); }
@@ -347,14 +351,14 @@ async function obey(cmd) {
 // Si rien n'arrive 8 s après le réveil, on le dit au lieu de rester muet
 setInterval(() => {
   if (earsWanted && !micBlocked && state !== "speaking" && state !== "thinking" && lastHeard < wokeAt && Date.now() - wokeAt > 8000 && !heardEl.textContent)
-    heardEl.textContent = "Je n'entends rien. Si la barre Micro ne bouge pas quand vous parlez, votre micro n'arrive pas jusqu'à moi.";
+    heardEl.textContent = "Je ne reconnais aucun mot. Essayez Google Chrome, ou choisissez le bon micro dans les paramètres du navigateur (edge://settings/content/microphone).";
 }, 1000);
 
 /* ---------------- Interface ---------------- */
 $("core").onclick = () => {
   wokeAt = Date.now(); heardEl.textContent = "";
   if (micBlocked && inArtifact) return;
-  if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); (inArtifact ? Promise.resolve() : openMic()).then(() => { earsWanted = true; if (state !== "speaking") startEars(); }); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
+  if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
   else if (state === "speaking") { speechSynthesis.cancel(); }
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
 };
@@ -362,6 +366,7 @@ if (inArtifact) $("keyField").hidden = true;
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
 $("gear").onclick = () => { $("settings").showModal(); if (!inArtifact) (micStream ? listMics() : openMic()); };
+$("settings").addEventListener("close", () => { micStream?.getTracks().forEach((t) => t.stop()); micStream = null; $("meter").hidden = true; if (earsWanted) { pauseEars(); earsPaused = false; startEars(); } });
 $("close").onclick = () => $("settings").close();
 $("test").onclick = () => speak("Bonjour monsieur. Je suis Jarvis, à votre service.");
 
