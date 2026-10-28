@@ -152,6 +152,10 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <input id="elvoice" type="text" autocomplete="off" placeholder="vide = Daniel (britannique)">
     <small>Facultatif. Laissez l'identifiant vide pour la voix « Daniel ».</small>
   </div>
+  <div class="field">
+    <label for="wake"><input type="checkbox" id="wake"> Exiger de dire « Jarvis » avant chaque ordre</label>
+    <small>Décoché : une fois réveillé, Jarvis répond à tout ce que vous dites, jusqu'à « en veille ». Avec des haut-parleurs, un casque évite qu'il s'entende lui-même.</small>
+  </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -180,7 +184,7 @@ const history = [];
 function setState(s, label) {
   state = s; statusEl.className = "";
   statusEl.textContent = label || {
-    off: "Touchez le micro pour me réveiller", idle: "Dites « Jarvis »…",
+    off: "Touchez le micro pour me réveiller", idle: "Je vous écoute",
     listening: "Je vous écoute, monsieur", thinking: "Analyse en cours…", speaking: "",
   }[s];
 }
@@ -207,27 +211,34 @@ $("pitch").value = store.get("pitch", "0.75");
 $("pitch").oninput = () => store.set("pitch", $("pitch").value);
 
 function currentVoice() { return voices.find((v) => v.name === $("voice").value); }
+/* ---------------- Parole (interruptible) ---------------- */
+let elevenAudio = null, endSpeech = null, lastSpoken = "", spokeEnd = 0;
+function stopSpeaking() {
+  speechSynthesis.cancel();
+  if (elevenAudio) { elevenAudio.pause(); elevenAudio = null; }
+  endSpeech?.();
+}
+function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking") setState(earsWanted ? "listening" : "off"); }
+
 /* Voix ElevenLabs (facultative) : beaucoup plus réaliste ; sinon, voix du navigateur */
-let elevenAudio = null;
 async function speakEleven(text) {
   const key = store.get("elKey", "");
   if (!key) return false;
   const voiceId = store.get("elVoice", "") || "onwK4e9ZLuTAKqWW03F9"; // "Daniel" : voix britannique posée
   try {
-    pauseEars();
     const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
       method: "POST",
       headers: { "content-type": "application/json", "xi-api-key": key },
-      body: JSON.stringify({ text, model_id: "eleven_multilingual_v2" }),
+      body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }),   // modèle rapide : réponse quasi immédiate
     });
     if (!r.ok) throw new Error("ElevenLabs " + r.status);
     const url = URL.createObjectURL(await r.blob());
-    elevenAudio?.pause();
-    elevenAudio = new Audio(url);
+    if (state !== "thinking" && state !== "speaking") { URL.revokeObjectURL(url); return true; } // interrompu entre-temps
+    const audio = new Audio(url); elevenAudio = audio;
     setState("speaking");
-    await new Promise((res) => { elevenAudio.onended = elevenAudio.onerror = res; elevenAudio.play().catch(res); });
+    await new Promise((res) => { endSpeech = res; audio.onended = audio.onerror = res; audio.play().catch(res); });
     URL.revokeObjectURL(url);
-    resumeEars();
+    afterSpeech();
     return true;
   } catch (e) {
     $("srstate").textContent = "Voix ElevenLabs indisponible (" + e.message + "), voix du navigateur utilisée.";
@@ -236,21 +247,21 @@ async function speakEleven(text) {
 }
 
 async function speak(text) {
-  saidEl.textContent = text;
+  saidEl.textContent = text; lastSpoken = text;
   if (await speakEleven(text)) return;
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window)) return resolve();
-    pauseEars();
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(text);
     const v = currentVoice();
     if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fr-FR";
-    u.pitch = parseFloat($("pitch").value); u.rate = 1.0;
-    u.onstart = () => setState("speaking");
+    u.pitch = parseFloat($("pitch").value); u.rate = 1.08;
+    setState("speaking");
     // Filet de sécurité : si le navigateur ne signale jamais la fin, Jarvis se remet quand même à écouter
     let done = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(guard); resolve(); resumeEars(); };
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); afterSpeech(); resolve(); };
     const guard = setTimeout(finish, 3000 + text.length * 90);
+    endSpeech = finish;
     u.onend = u.onerror = finish;
     speechSynthesis.speak(u);
   });
@@ -271,13 +282,23 @@ function startEars() {
   earsWanted = true;
   if (rec || earsPaused) return;
   const me = new SR(); rec = me; rec.lang = "fr-FR"; rec.continuous = true; rec.interimResults = true;
+  let silenceT = null;
   rec.onresult = (e) => {
-    let interim = "";
+    let interim = "", finals = [];
     for (let i = e.resultIndex; i < e.results.length; i++) {
       const t = e.results[i][0].transcript;
-      if (e.results[i].isFinal) handleHeard(t.trim()); else interim += t;
+      if (e.results[i].isFinal) finals.push(t); else interim += t;
     }
-    if (interim) { heardEl.textContent = "J'entends : « " + interim + " »"; lastHeard = Date.now(); }
+    const now = (finals.join(" ") + " " + interim).trim();
+    if (!now || isEcho(now)) return;
+    // Vous lui coupez la parole : il se tait et vous écoute
+    if (state === "speaking") { if (now.split(/\s+/).length < 2) return; stopSpeaking(); setState("listening"); }
+    lastHeard = Date.now();
+    clearTimeout(silenceT);
+    if (finals.length) { handleHeard(finals.join(" ").trim()); return; }
+    heardEl.textContent = "J'entends : « " + interim + " »";
+    // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
+    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 700);
   };
   rec.onerror = (e) => {
     if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
@@ -292,7 +313,7 @@ function startEars() {
       warn("Erreur d'écoute : " + e.error);
     }
   };
-  rec.onend = () => { if (rec === me) rec = null; if (earsWanted && !earsPaused && !micBlocked) setTimeout(startEars, 250); };
+  rec.onend = () => { if (rec === me) rec = null; if (earsWanted && !earsPaused && !micBlocked) setTimeout(startEars, 60); };
   // Les navigateurs récents acceptent le micro choisi dans les réglages ; sinon c'est le micro par défaut
   rec.onaudiostart = () => sr("Écoute active");
   rec.onspeechstart = () => sr("Voix détectée…");
@@ -341,17 +362,26 @@ $("mic").onchange = async () => {
   await openMic();
 };
 function pauseEars() { earsPaused = true; try { rec && rec.abort(); } catch {} rec = null; }
-function resumeEars() { earsPaused = false; if (earsWanted) startEars(); if (state !== "off") setState(Date.now() < awakeUntil ? "listening" : "idle"); }
-function sleepEars() { earsWanted = false; pauseEars(); earsPaused = false; setState("off"); }
+function sleepEars() { earsWanted = false; stopSpeaking(); pauseEars(); earsPaused = false; setState("off"); }
+
+// Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
+const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
+function isEcho(text) {
+  if (state !== "speaking" && Date.now() - spokeEnd > 1500) return false;
+  const said = new Set(norm(lastSpoken)), heard = norm(text);
+  if (!heard.length) return true;
+  return heard.filter((w) => said.has(w)).length / heard.length >= 0.5;
+}
 
 const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive)[\s,.!?]*/i;
+const needWake = () => store.get("wake", "0") === "1";
 function handleHeard(text) {
-  if (!text || state === "thinking" || state === "speaking") return;
+  if (!text || state === "thinking") return;
   const hasWake = WAKE.test(text);
-  if (!hasWake && Date.now() > awakeUntil) { heardEl.textContent = "J'ai entendu « " + text + " ». Dites « Jarvis » avant votre ordre."; return; }
+  if (needWake() && !hasWake && Date.now() > awakeUntil) { heardEl.textContent = "J'ai entendu « " + text + " ». Dites « Jarvis » avant votre ordre."; return; }
   const cmd = text.replace(WAKE, "").trim();
   heardEl.textContent = "« " + text + " »";
-  if (!cmd) { awakeUntil = Date.now() + 20000; speak("Oui monsieur ?"); return; }
+  if (!cmd) { awakeUntil = Date.now() + 30000; speak("Oui monsieur ?"); return; }
   obey(cmd);
 }
 
@@ -525,12 +555,14 @@ $("core").onclick = () => {
   wokeAt = Date.now(); heardEl.textContent = "";
   if (micBlocked && inArtifact) return;
   if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
-  else if (state === "speaking") { speechSynthesis.cancel(); elevenAudio?.pause(); elevenAudio?.onended?.(); }
+  else if (state === "speaking") { stopSpeaking(); }
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
 };
 if (inArtifact) $("keyField").hidden = true;
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("wake").checked = needWake();
+$("wake").onchange = () => store.set("wake", $("wake").checked ? "1" : "0");
 $("elkey").value = store.get("elKey", "");
 $("elkey").onchange = () => store.set("elKey", $("elkey").value.trim());
 $("elvoice").value = store.get("elVoice", "");
@@ -561,7 +593,7 @@ function tickHud() {
 setInterval(tickHud, 250); tickHud();
 
 $("stop").onclick = () => {
-  if (state === "speaking") { speechSynthesis.cancel(); elevenAudio?.pause(); elevenAudio?.onended?.(); }
+  if (state === "speaking") stopSpeaking();
   else { sleepEars(); saidEl.textContent = ""; heardEl.textContent = ""; }
 };
 
@@ -643,11 +675,17 @@ function drawSphere() {
   }
   ctx.stroke();
   // points
-  for (let i = 0; i < N; i++) {
-    const z = proj[i * 3 + 2], depth = (1 - z) / 2;            // 1 = devant
-    const al = 0.15 + depth * 0.75, sz = 0.6 + depth * 1.6;
+  // points, regroupés par profondeur (5 teintes) pour rester fluide
+  for (let k = 0; k < 5; k++) {
+    const al = 0.15 + (k / 4) * 0.75, sz = 0.6 + (k / 4) * 1.6;
     ctx.fillStyle = `rgba(${rgb},${al})`;
-    ctx.fillRect(proj[i * 3] - sz / 2, proj[i * 3 + 1] - sz / 2, sz, sz);
+    ctx.beginPath();
+    for (let i = 0; i < N; i++) {
+      const depth = (1 - proj[i * 3 + 2]) / 2;               // 1 = devant
+      if (Math.min(4, Math.max(0, Math.round(depth * 4))) !== k) continue;
+      ctx.rect(proj[i * 3] - sz / 2, proj[i * 3 + 1] - sz / 2, sz, sz);
+    }
+    ctx.fill();
   }
   // anneau de scan
   ctx.strokeStyle = `rgba(${rgb},${0.18 + energy * 0.2})`; ctx.lineWidth = 1;
