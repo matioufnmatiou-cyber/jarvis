@@ -99,6 +99,13 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var
     <label for="pitch">Grave ↔ aigu</label>
     <input id="pitch" type="range" min="0.3" max="1.4" step="0.05" value="0.75">
   </div>
+  <div class="field">
+    <label for="elkey">Clé ElevenLabs (voix réaliste)</label>
+    <input id="elkey" type="password" autocomplete="off" placeholder="sk_…">
+    <label for="elvoice">Identifiant de la voix ElevenLabs</label>
+    <input id="elvoice" type="text" autocomplete="off" placeholder="onwK4e9ZLuTAKqWW03F9 (Daniel, britannique)">
+    <small>Facultatif. Laissez l'identifiant vide pour la voix « Daniel ». Pour une autre voix, copiez son « Voice ID » depuis elevenlabs.io.</small>
+  </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -153,8 +160,37 @@ $("pitch").value = store.get("pitch", "0.75");
 $("pitch").oninput = () => store.set("pitch", $("pitch").value);
 
 function currentVoice() { return voices.find((v) => v.name === $("voice").value); }
-function speak(text) {
+/* Voix ElevenLabs (facultative) : beaucoup plus réaliste ; sinon, voix du navigateur */
+let elevenAudio = null;
+async function speakEleven(text) {
+  const key = store.get("elKey", "");
+  if (!key) return false;
+  const voiceId = store.get("elVoice", "") || "onwK4e9ZLuTAKqWW03F9"; // "Daniel" : voix britannique posée
+  try {
+    pauseEars();
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+      method: "POST",
+      headers: { "content-type": "application/json", "xi-api-key": key },
+      body: JSON.stringify({ text, model_id: "eleven_multilingual_v2" }),
+    });
+    if (!r.ok) throw new Error("ElevenLabs " + r.status);
+    const url = URL.createObjectURL(await r.blob());
+    elevenAudio?.pause();
+    elevenAudio = new Audio(url);
+    setState("speaking");
+    await new Promise((res) => { elevenAudio.onended = elevenAudio.onerror = res; elevenAudio.play().catch(res); });
+    URL.revokeObjectURL(url);
+    resumeEars();
+    return true;
+  } catch (e) {
+    $("srstate").textContent = "Voix ElevenLabs indisponible (" + e.message + "), voix du navigateur utilisée.";
+    return false;
+  }
+}
+
+async function speak(text) {
   saidEl.textContent = text;
+  if (await speakEleven(text)) return;
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window)) return resolve();
     pauseEars();
@@ -197,7 +233,7 @@ function startEars() {
     if (interim) { heardEl.textContent = "J'entends : « " + interim + " »"; lastHeard = Date.now(); }
   };
   rec.onerror = (e) => {
-    sr("Erreur : " + e.error);
+    if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
     if (e.error === "not-allowed" || e.error === "service-not-allowed" || e.error === "audio-capture") {
       micBlocked = true; earsWanted = false; if (rec === me) rec = null;
       if (inArtifact) { $("dl").hidden = false; setState("off", "Micro bloqué sur cette page"); }
@@ -359,12 +395,16 @@ $("core").onclick = () => {
   wokeAt = Date.now(); heardEl.textContent = "";
   if (micBlocked && inArtifact) return;
   if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
-  else if (state === "speaking") { speechSynthesis.cancel(); }
+  else if (state === "speaking") { speechSynthesis.cancel(); elevenAudio?.pause(); elevenAudio?.onended?.(); }
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
 };
 if (inArtifact) $("keyField").hidden = true;
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("elkey").value = store.get("elKey", "");
+$("elkey").onchange = () => store.set("elKey", $("elkey").value.trim());
+$("elvoice").value = store.get("elVoice", "");
+$("elvoice").onchange = () => store.set("elVoice", $("elvoice").value.trim());
 $("gear").onclick = () => { $("settings").showModal(); if (!inArtifact) (micStream ? listMics() : openMic()); };
 $("settings").addEventListener("close", () => { micStream?.getTracks().forEach((t) => t.stop()); micStream = null; $("meter").hidden = true; if (earsWanted) { pauseEars(); earsPaused = false; startEars(); } });
 $("close").onclick = () => $("settings").close();
