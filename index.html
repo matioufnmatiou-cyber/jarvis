@@ -2,98 +2,176 @@
 <html lang="fr"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover"><style>body{margin:0}[hidden]{display:none!important}</style></head><body>
 <title>J.A.R.V.I.S.</title>
 <meta name="claude:viewport-fit-sides" content="cover">
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600&family=IBM+Plex+Mono:wght@400&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;600&family=Share+Tech+Mono&display=swap">
 <style>
-/* Layout: voice-only HUD. One reactor in the middle you tap to wake Jarvis, live caption under it, settings tucked behind a gear. Single dark look on purpose. */
+/* Layout: full-screen particle sphere behind a HUD. Command panel docked left, clock panel top centre, mic/stop dock bottom centre. Single dark look on purpose. */
 :root {
-  --bg: #050b14;
-  --panel: #0a1626;
-  --line: #17324d;
-  --fg: #d6ecff;
-  --muted: #7d9ab5;
-  --cyan: #4fd8ff;
-  --gold: #ffb84d;
+  --bg: #02060b;
+  --panel: rgba(6, 22, 34, .78);
+  --line: #10475c;
+  --fg: #c9f3ff;
+  --muted: #5f97aa;
+  --cyan: #38e1ff;
+  --gold: #ffa94d;
   --display: "Chakra Petch", "Segoe UI", system-ui, sans-serif;
-  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  --mono: "Share Tech Mono", ui-monospace, Menlo, monospace;
   color-scheme: dark;
 }
 html, body { height: 100%; }
-body {
-  background: radial-gradient(ellipse at 50% 40%, #0c2238 0%, var(--bg) 65%) fixed, var(--bg);
-  color: var(--fg);
-  font-family: var(--display);
-  overflow: hidden;
-}
-.app {
-  height: 100%; box-sizing: border-box;
-  display: grid; grid-template-rows: auto 1fr auto; justify-items: center;
-  padding-left: max(16px, env(safe-area-inset-left, 0px));
-  padding-right: max(16px, env(safe-area-inset-right, 0px));
-  padding-block: 16px;
-}
-header { width: 100%; max-width: 760px; display: flex; justify-content: space-between; align-items: center; }
-h1 { font-weight: 600; letter-spacing: .32em; font-size: 20px; margin: 0; color: var(--cyan); }
-#gear { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px; padding: 6px 10px; cursor: pointer; font: inherit; font-size: 12px; letter-spacing: .1em; text-transform: uppercase; }
-.stage { display: grid; place-items: center; align-content: center; gap: 18px; width: 100%; max-width: 640px; min-height: 0; }
-#core { background: none; border: 0; padding: 0; cursor: pointer; border-radius: 50%; }
-#core:focus-visible, #gear:focus-visible, button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 4px; }
-canvas { width: min(70vw, 300px); height: min(70vw, 300px); display: block; }
-#status { font-family: var(--mono); font-size: 13px; letter-spacing: .16em; text-transform: uppercase; color: var(--cyan); text-align: center; }
-#status.warn { color: var(--gold); }
-#heard, #said { text-align: center; line-height: 1.5; max-width: 34em; min-height: 1.5em; overflow-wrap: anywhere; }
-#heard { color: var(--muted); font-size: 15px; font-style: italic; }
-#said { color: var(--fg); font-size: 18px; }
-#meter { display: flex; align-items: center; gap: 10px; font-family: var(--mono); font-size: 11px; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); width: 100%; }
+body { background: var(--bg); color: var(--fg); font-family: var(--mono); overflow: hidden; }
+#sphere { position: fixed; inset: 0; width: 100%; height: 100%; display: block; }
+.hud { position: fixed; inset: 0; pointer-events: none; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); padding-block: 14px; box-sizing: border-box; }
+.hud > * { pointer-events: auto; }
+.glow { border: 1px solid var(--line); background: var(--panel); box-shadow: 0 0 14px rgba(56, 225, 255, .18), inset 0 0 18px rgba(56, 225, 255, .06); border-radius: 6px; backdrop-filter: blur(3px); }
+button { font-family: var(--mono); color: var(--fg); cursor: pointer; }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+
+/* Menu */
+#menuBtn { position: absolute; top: 14px; left: max(16px, env(safe-area-inset-left, 0px)); padding: 6px 12px; font-size: 12px; letter-spacing: .14em; color: var(--cyan); }
+#panel { position: absolute; top: 52px; left: max(16px, env(safe-area-inset-left, 0px)); bottom: 14px; width: 250px; padding: 12px 10px; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; transition: transform .35s ease, opacity .35s ease; }
+#panel.closed { transform: translateX(-120%); opacity: 0; }
+#panel h2 { font-size: 11px; letter-spacing: .14em; color: var(--cyan); margin: 0 0 6px; font-weight: 400; }
+#panel h3 { font-size: 10px; letter-spacing: .16em; color: var(--muted); margin: 10px 4px 2px; font-weight: 400; text-transform: uppercase; }
+.cmd { display: flex; align-items: center; gap: 10px; width: 100%; text-align: left; font-size: 11.5px; letter-spacing: .1em; text-transform: uppercase; background: rgba(8, 30, 44, .7); border: 1px solid #0d3647; border-radius: 4px; padding: 8px 10px; }
+.cmd:hover { border-color: var(--cyan); box-shadow: 0 0 10px rgba(56, 225, 255, .3); }
+.cmd .ic { width: 16px; text-align: center; color: var(--cyan); }
+.cmd.hot { border-color: var(--gold); color: var(--gold); box-shadow: 0 0 10px rgba(255, 169, 77, .25); }
+.cmd.hot .ic { color: var(--gold); }
+.cmd.on { border-color: var(--cyan); color: var(--cyan); box-shadow: 0 0 12px rgba(56, 225, 255, .35); }
+#panel .ver { margin-top: auto; padding-top: 10px; text-align: center; font-size: 10px; letter-spacing: .2em; color: var(--muted); }
+
+/* Horloge */
+#clock { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: grid; grid-template-columns: auto auto auto; align-items: center; gap: 16px; padding: 8px 18px; }
+#clock .side { font-size: 10px; letter-spacing: .14em; color: var(--muted); line-height: 1.6; }
+#clock .side b { color: var(--cyan); font-weight: 400; }
+#time { font-family: var(--display); font-weight: 600; font-size: clamp(26px, 5vw, 40px); letter-spacing: .14em; color: var(--cyan); text-shadow: 0 0 12px rgba(56, 225, 255, .8); font-variant-numeric: tabular-nums; text-align: center; }
+#date { font-size: 10px; letter-spacing: .2em; color: var(--muted); text-align: center; text-transform: uppercase; }
+#gear { position: absolute; top: 14px; right: max(16px, env(safe-area-inset-right, 0px)); padding: 6px 12px; font-size: 12px; letter-spacing: .14em; color: var(--cyan); }
+
+/* Bas : sous-titres + boutons */
+#dock { position: absolute; left: 50%; bottom: max(14px, env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); width: min(92vw, 640px); display: flex; flex-direction: column; align-items: center; gap: 10px; text-align: center; }
+#heard { color: var(--muted); font-size: 13px; min-height: 1.3em; overflow-wrap: anywhere; }
+#said { font-family: var(--display); font-size: 17px; line-height: 1.45; min-height: 1.45em; overflow-wrap: anywhere; text-shadow: 0 0 8px rgba(56, 225, 255, .35); }
+.round { display: flex; gap: 14px; }
+.round button { width: 48px; height: 48px; border-radius: 50%; border: 1px solid var(--cyan); background: rgba(6, 30, 44, .8); color: var(--cyan); font-size: 18px; display: grid; place-items: center; box-shadow: 0 0 14px rgba(56, 225, 255, .35); }
+#core.live { background: var(--cyan); color: var(--bg); animation: ping 1.6s ease-out infinite; }
+@keyframes ping { 0% { box-shadow: 0 0 0 0 rgba(56, 225, 255, .55); } 100% { box-shadow: 0 0 0 18px rgba(56, 225, 255, 0); } }
+#status { font-size: 11px; letter-spacing: .22em; text-transform: uppercase; color: var(--cyan); }
+#status.warn { color: var(--gold); letter-spacing: .06em; text-transform: none; font-size: 12px; }
+#srstate { font-size: 10px; letter-spacing: .1em; color: var(--muted); min-height: 1.2em; }
+#dl { display: flex; flex-direction: column; align-items: center; gap: 8px; color: var(--gold); font-size: 13px; max-width: 30em; line-height: 1.5; }
+
+/* Cinématique de démarrage */
+#boot { position: fixed; inset: 0; display: grid; place-items: end start; padding: 0 0 18vh max(24px, env(safe-area-inset-left, 0px)); pointer-events: none; transition: opacity .8s ease; }
+#boot.gone { opacity: 0; }
+#bootlog { font-size: 12px; line-height: 1.8; color: var(--cyan); text-shadow: 0 0 6px rgba(56, 225, 255, .6); white-space: pre; }
+#bootbar { width: min(60vw, 280px); height: 2px; background: #0d3647; margin-top: 10px; }
+#bootbar i { display: block; height: 100%; width: 0; background: var(--cyan); box-shadow: 0 0 8px var(--cyan); }
+.intro { opacity: 0; }
+.ready .intro { opacity: 1; transition: opacity .9s ease .1s; }
+#skip { position: fixed; right: max(16px, env(safe-area-inset-right, 0px)); bottom: max(16px, env(safe-area-inset-bottom, 0px)); font-size: 11px; letter-spacing: .14em; color: var(--muted); background: none; border: 1px solid #0d3647; border-radius: 4px; padding: 6px 10px; }
+.ready #skip { display: none; }
+
+/* Réglages */
+.btn { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; background: var(--cyan); color: var(--bg); border: 0; border-radius: 6px; padding: 10px 14px; font-size: 12px; }
+.ghost { background: transparent; color: var(--cyan); border: 1px solid var(--cyan); }
+dialog { background: #061620; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; width: min(92vw, 460px); max-height: 86vh; box-sizing: border-box; padding: 20px; box-shadow: 0 0 30px rgba(56, 225, 255, .2); }
+dialog::backdrop { background: rgba(0, 0, 0, .65); }
+dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(--cyan); font-weight: 400; }
+.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 12px; color: var(--muted); }
+.field input, .field select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 4px; padding: 9px; font: inherit; font-size: 12px; width: 100%; box-sizing: border-box; }
+.field small { font-size: 11px; line-height: 1.5; }
+#meter { display: flex; align-items: center; gap: 10px; font-size: 10px; letter-spacing: .14em; color: var(--muted); }
 #meter .bar { flex: 1; height: 6px; background: var(--line); border-radius: 3px; overflow: hidden; }
 #level { height: 100%; width: 0; background: var(--cyan); transition: width .08s linear; }
-#srstate { font-family: var(--mono); font-size: 11px; letter-spacing: .1em; color: var(--muted); min-height: 1.2em; }
-#help { font-family: var(--mono); font-size: 12px; color: var(--muted); text-align: center; max-width: 40em; line-height: 1.6; }
-#dl { display: flex; flex-direction: column; align-items: center; gap: 8px; text-align: center; color: var(--gold); font-size: 14px; max-width: 32em; line-height: 1.5; }
-.btn { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; background: var(--cyan); color: var(--bg); border: 0; border-radius: 8px; padding: 11px 16px; cursor: pointer; font-size: 13px; }
-dialog { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 12px; width: min(92vw, 440px); box-sizing: border-box; padding: 20px; }
-dialog::backdrop { background: rgba(0, 0, 0, .6); }
-dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var(--cyan); }
-.field { display: flex; flex-direction: column; gap: 6px; margin-bottom: 14px; font-size: 13px; color: var(--muted); }
-.field input, .field select { background: var(--bg); color: var(--fg); border: 1px solid var(--line); border-radius: 6px; padding: 9px; font: inherit; font-size: 13px; width: 100%; box-sizing: border-box; }
-.field small { font-family: var(--mono); font-size: 11px; line-height: 1.5; }
 .row { display: flex; gap: 8px; justify-content: flex-end; flex-wrap: wrap; }
-.ghost { background: transparent; color: var(--cyan); border: 1px solid var(--cyan); }
+#helpList { font-size: 12px; line-height: 1.9; color: var(--fg); margin: 0 0 14px; padding-left: 18px; }
+
+@media (max-width: 900px) {
+  #panel { width: min(80vw, 260px); z-index: 2; }
+  #clock .side { display: none; }
+}
 @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
 </style>
 
-<div class="app">
-  <header>
-    <h1>J.A.R.V.I.S.</h1>
-    <button id="gear" type="button">Réglages</button>
-  </header>
+<canvas id="sphere" aria-hidden="true"></canvas>
 
-  <main class="stage">
-    <button id="core" type="button" aria-label="Activer Jarvis"><canvas id="reactor" width="600" height="600"></canvas></button>
-    <div id="status">Touchez le réacteur pour me réveiller</div>
-    <div id="srstate"></div>
+<div class="hud" id="hud">
+  <button id="menuBtn" class="glow intro" type="button" aria-expanded="true" aria-controls="panel">≡ MENU</button>
+
+  <nav id="panel" class="glow intro" aria-label="Commandes">
+    <h2>◆ CONTRÔLES_SYSTÈME // MENU</h2>
+    <h3>Assistant</h3>
+    <button class="cmd" data-act="wake" type="button"><span class="ic">◉</span>Réveiller Jarvis</button>
+    <button class="cmd" data-act="sleep" type="button"><span class="ic">◌</span>Mettre en veille</button>
+    <h3>Commandes rapides</h3>
+    <button class="cmd hot" data-say="quelle heure est-il" type="button"><span class="ic">◷</span>Quelle heure</button>
+    <button class="cmd" data-say="quel jour sommes-nous" type="button"><span class="ic">▦</span>Date du jour</button>
+    <button class="cmd" data-say="ouvre youtube" type="button"><span class="ic">▶</span>YouTube</button>
+    <button class="cmd" data-say="ouvre google" type="button"><span class="ic">⌕</span>Google</button>
+    <button class="cmd" data-say="ouvre météo" type="button"><span class="ic">☁</span>Météo</button>
+    <button class="cmd" data-say="ouvre spotify" type="button"><span class="ic">♫</span>Spotify</button>
+    <h3>Système</h3>
+    <button class="cmd" data-say="change de voix" type="button"><span class="ic">♪</span>Changer de voix</button>
+    <button class="cmd" data-say="plus grave" type="button"><span class="ic">↓</span>Voix plus grave</button>
+    <button class="cmd" data-act="help" type="button"><span class="ic">≣</span>Liste des commandes</button>
+    <button class="cmd" data-act="settings" type="button"><span class="ic">⚙</span>Paramètres</button>
+    <div class="ver">VERSION 2.0</div>
+  </nav>
+
+  <div id="clock" class="glow intro">
+    <div class="side">SYS<br><b id="sysState">EN LIGNE</b></div>
+    <div><div id="time">00:00:00</div><div id="date"></div></div>
+    <div class="side">NOYAU<br><b id="coreState">VEILLE</b></div>
+  </div>
+
+  <button id="gear" class="glow intro" type="button">⚙ RÉGLAGES</button>
+
+  <div id="dock" class="intro">
     <div id="heard"></div>
     <div id="said"></div>
     <div id="dl" hidden>
-      <span>Ici le micro est bloqué. Téléchargez Jarvis et ouvrez le fichier dans Chrome ou Edge : là il vous entendra.</span>
+      <span>Ici le micro est bloqué. Ouvrez Jarvis dans Edge ou Chrome pour qu'il vous entende.</span>
       <button class="btn" id="dlBtn" type="button">Télécharger Jarvis</button>
     </div>
-  </main>
-
-  <div id="help">Dites « Jarvis » puis votre ordre. Exemples : « Jarvis, mets AC/DC sur YouTube », « Jarvis, quelle heure est-il », « Jarvis, change de voix », « Jarvis, plus grave », « Jarvis, en veille ».</div>
+    <div class="round">
+      <button id="core" type="button" aria-label="Activer Jarvis" title="Parler à Jarvis">🎙</button>
+      <button id="stop" type="button" aria-label="Arrêter" title="Arrêter / mettre en veille">■</button>
+    </div>
+    <div id="status">Touchez le micro pour me réveiller</div>
+    <div id="srstate"></div>
+  </div>
 </div>
 
+<div id="boot" aria-hidden="true"><div><div id="bootlog"></div><div id="bootbar"><i id="bootfill"></i></div></div></div>
+<button id="skip" type="button">PASSER ▸</button>
+
+<dialog id="helpDlg">
+  <h2>LISTE DES COMMANDES</h2>
+  <ul id="helpList">
+    <li>« Jarvis, quelle heure est-il ? »</li>
+    <li>« Jarvis, quel jour sommes-nous ? »</li>
+    <li>« Jarvis, mets AC/DC sur YouTube »</li>
+    <li>« Jarvis, cherche la météo à Paris »</li>
+    <li>« Jarvis, ouvre Netflix / Spotify / Discord… »</li>
+    <li>« Jarvis, change de voix » · « plus grave » · « plus aigu »</li>
+    <li>« Jarvis, en veille » pour l'arrêter</li>
+    <li>Avec la clé Anthropic : n'importe quelle question</li>
+  </ul>
+  <div class="row"><button class="btn" type="button" onclick="this.closest('dialog').close()">OK</button></div>
+</dialog>
+
 <dialog id="settings">
-  <h2>RÉGLAGES</h2>
+  <h2>PARAMÈTRES</h2>
   <div class="field">
     <label for="mic">Micro</label>
     <select id="mic"><option value="">Micro par défaut</option></select>
-    <div id="meter" hidden><span>Niveau</span><div class="bar"><div id="level"></div></div></div>
-    <small>Parlez : la barre doit bouger. Choisissez aussi ce micro dans les paramètres du navigateur (edge://settings/content/microphone ou chrome://settings/content/microphone), car c'est celui-là que Jarvis utilise pour comprendre les mots.</small>
+    <div id="meter" hidden><span>NIVEAU</span><div class="bar"><div id="level"></div></div></div>
+    <small>Parlez : la barre doit bouger. Choisissez aussi ce micro dans les paramètres du navigateur (edge://settings/content/microphone), car c'est celui-là que Jarvis utilise pour comprendre les mots.</small>
   </div>
   <div class="field">
-    <label for="voice">Voix de Jarvis</label>
+    <label for="voice">Voix du navigateur</label>
     <select id="voice"></select>
-    <small>Les plus belles voix sont dans Microsoft Edge (voix « Online Natural »).</small>
   </div>
   <div class="field">
     <label for="pitch">Grave ↔ aigu</label>
@@ -103,13 +181,13 @@ dialog h2 { margin: 0 0 12px; font-size: 16px; letter-spacing: .14em; color: var
     <label for="elkey">Clé ElevenLabs (voix réaliste)</label>
     <input id="elkey" type="password" autocomplete="off" placeholder="sk_…">
     <label for="elvoice">Identifiant de la voix ElevenLabs</label>
-    <input id="elvoice" type="text" autocomplete="off" placeholder="onwK4e9ZLuTAKqWW03F9 (Daniel, britannique)">
-    <small>Facultatif. Laissez l'identifiant vide pour la voix « Daniel ». Pour une autre voix, copiez son « Voice ID » depuis elevenlabs.io.</small>
+    <input id="elvoice" type="text" autocomplete="off" placeholder="vide = Daniel (britannique)">
+    <small>Facultatif. Laissez l'identifiant vide pour la voix « Daniel ».</small>
   </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
-    <small>Facultatif. Sans clé, Jarvis comprend les ordres simples (YouTube, Google, ouvrir un site, l'heure, la date). La clé reste dans votre navigateur.</small>
+    <small>Facultatif. Sans clé, Jarvis comprend les ordres simples. La clé reste dans votre navigateur.</small>
   </div>
   <div class="row">
     <button class="btn ghost" id="test" type="button">Tester la voix</button>
@@ -133,7 +211,7 @@ const history = [];
 function setState(s, label) {
   state = s; statusEl.className = "";
   statusEl.textContent = label || {
-    off: "Touchez le réacteur pour me réveiller", idle: "Dites « Jarvis »…",
+    off: "Touchez le micro pour me réveiller", idle: "Dites « Jarvis »…",
     listening: "Je vous écoute, monsieur", thinking: "Analyse en cours…", speaking: "",
   }[s];
 }
@@ -419,29 +497,162 @@ $("dlBtn").onclick = async () => {
   } catch (e) { if (!e || e.code !== "declined") warn("Le téléchargement n'a pas marché ici."); }
 };
 
-/* ---------------- Réacteur ---------------- */
-const cv = $("reactor"), ctx = cv.getContext("2d");
-const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
-let t = 0;
-function draw() {
-  const W = cv.width, c = W / 2; ctx.clearRect(0, 0, W, W);
-  const energy = { off: 0.1, idle: 0.3, listening: 1, thinking: 0.7, speaking: 0.9 }[state];
-  const color = state === "thinking" ? "255,184,77" : state === "off" ? "90,140,180" : "79,216,255";
-  const pulse = 1 + Math.sin(t * (2 + energy * 7)) * 0.07 * energy;
-  const g = ctx.createRadialGradient(c, c, 0, c, c, 120 * pulse);
-  g.addColorStop(0, "rgba(255,255,255,.95)"); g.addColorStop(0.3, `rgba(${color},.8)`); g.addColorStop(1, `rgba(${color},0)`);
-  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(c, c, 120 * pulse, 0, Math.PI * 2); ctx.fill();
-  [[165, 18, 1], [215, 36, -0.6], [268, 60, 0.35]].forEach(([r, n, dir], k) => {
-    ctx.strokeStyle = `rgba(${color},${0.8 - k * 0.2})`; ctx.lineWidth = k === 0 ? 10 : 5;
-    for (let i = 0; i < n; i++) {
-      const a0 = (i / n) * Math.PI * 2 + t * dir * (0.3 + energy);
-      ctx.beginPath(); ctx.arc(c, c, r, a0, a0 + (Math.PI * 2 / n) * 0.6); ctx.stroke();
-    }
-  });
-  t += reduce ? 0 : 0.016;
-  requestAnimationFrame(draw);
+/* ---------------- HUD : horloge, menu, boutons ---------------- */
+const STATE_LABEL = { off: "VEILLE", idle: "ATTENTE", listening: "ÉCOUTE", thinking: "ANALYSE", speaking: "PAROLE" };
+function tickHud() {
+  const d = new Date();
+  $("time").textContent = d.toLocaleTimeString("fr-FR", { hour12: false });
+  $("date").textContent = d.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" });
+  $("coreState").textContent = STATE_LABEL[state] || "VEILLE";
+  $("core").classList.toggle("live", earsWanted);
+  document.querySelector('[data-act="wake"]').classList.toggle("on", earsWanted);
 }
-draw();
+setInterval(tickHud, 250); tickHud();
+
+const panel = $("panel");
+if (matchMedia("(max-width: 900px)").matches) { panel.classList.add("closed"); $("menuBtn").setAttribute("aria-expanded", "false"); }
+$("menuBtn").onclick = () => {
+  const closed = panel.classList.toggle("closed");
+  $("menuBtn").setAttribute("aria-expanded", String(!closed));
+};
+panel.addEventListener("click", (e) => {
+  const b = e.target.closest(".cmd"); if (!b) return;
+  if (b.dataset.say) { wokeAt = Date.now(); heardEl.textContent = ""; obey(b.dataset.say); }
+  else if (b.dataset.act === "wake") { if (state === "off") $("core").click(); }
+  else if (b.dataset.act === "sleep") obey("en veille");
+  else if (b.dataset.act === "help") $("helpDlg").showModal();
+  else if (b.dataset.act === "settings") $("gear").click();
+});
+$("stop").onclick = () => {
+  if (state === "speaking") { speechSynthesis.cancel(); elevenAudio?.pause(); elevenAudio?.onended?.(); }
+  else { sleepEars(); saidEl.textContent = ""; heardEl.textContent = ""; }
+};
+
+/* ---------------- Sphère de particules ---------------- */
+const cv = $("sphere"), ctx = cv.getContext("2d");
+const reduce = matchMedia("(prefers-reduced-motion: reduce)").matches;
+let W = 0, H = 0, DPR = 1;
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = cv.clientWidth; H = cv.clientHeight;
+  cv.width = W * DPR; cv.height = H * DPR;
+  ctx.setTransform(DPR, 0, 0, DPR, 0, 0);
+}
+addEventListener("resize", resize); resize();
+
+const N = 1100, GOLDEN = Math.PI * (3 - Math.sqrt(5));
+const P = [];
+for (let i = 0; i < N; i++) {
+  const y = 1 - (i / (N - 1)) * 2, r = Math.sqrt(1 - y * y), th = GOLDEN * i;
+  const x = Math.cos(th) * r, z = Math.sin(th) * r;
+  // relief irrégulier, comme un hologramme instable
+  const bump = 1 + 0.10 * Math.sin(x * 5.1 + 1.3) * Math.cos(y * 4.3) + 0.06 * Math.sin(z * 7.7 + y * 3.1);
+  const a = Math.random() * Math.PI * 2, b = Math.acos(Math.random() * 2 - 1), far = 3 + Math.random() * 4;
+  P.push({ x, y, z, bump, ph: Math.random() * Math.PI * 2,
+    sx: far * Math.sin(b) * Math.cos(a), sy: far * Math.cos(b), sz: far * Math.sin(b) * Math.sin(a), delay: Math.random() * 0.5 });
+}
+// liens entre voisins proches (calculés une fois)
+const LINKS = [];
+for (let i = 0; i < N; i++) {
+  let found = 0;
+  for (let j = i + 1; j < N && found < 3; j++) {
+    const p = P[i], q = P[j];
+    if (p.x * q.x + p.y * q.y + p.z * q.z > 0.9935) { LINKS.push(i, j); found++; }
+  }
+}
+
+let rotY = 0, rotX = 0.35, energy = 0.2, t = 0;
+let bootT = reduce ? 1 : 0;              // 0 → 1 pendant la cinématique
+const proj = new Float32Array(N * 3);
+
+function drawSphere() {
+  const target = { off: 0.15, idle: 0.35, listening: 0.85, thinking: 0.6, speaking: 1 }[state] ?? 0.3;
+  const heardBoost = Date.now() - lastHeard < 400 ? 0.4 : 0;
+  energy += (target + heardBoost - energy) * 0.06;
+  const speed = 0.0025 + energy * 0.007;
+  rotY += reduce ? 0 : speed; t += reduce ? 0 : 0.016;
+  const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
+  const R = Math.min(W, H) * 0.27, ox = W / 2, oy = H * 0.48;
+  const rgb = state === "thinking" ? [255, 169, 77] : state === "off" ? [70, 150, 190] : [56, 225, 255];
+  const talk = state === "speaking" ? 0.07 + 0.05 * Math.sin(t * 9) : 0;
+
+  ctx.globalCompositeOperation = "source-over";
+  ctx.fillStyle = "rgba(2,6,11,0.55)"; ctx.fillRect(0, 0, W, H);   // traînée légère
+  // halo
+  const halo = ctx.createRadialGradient(ox, oy, R * 0.2, ox, oy, R * 1.6);
+  halo.addColorStop(0, `rgba(${rgb},${0.10 + energy * 0.12})`); halo.addColorStop(1, "rgba(0,0,0,0)");
+  ctx.fillStyle = halo; ctx.fillRect(0, 0, W, H);
+
+  ctx.globalCompositeOperation = "lighter";
+  for (let i = 0; i < N; i++) {
+    const p = P[i];
+    const k = Math.min(1, Math.max(0, (bootT - p.delay) / (1 - p.delay)));
+    const e = 1 - Math.pow(1 - k, 3);
+    const wob = 1 + talk * Math.sin(t * 14 + p.ph) + 0.02 * energy * Math.sin(t * 3 + p.ph);
+    const s = p.bump * wob;
+    let x = p.sx + (p.x * s - p.sx) * e, y = p.sy + (p.y * s - p.sy) * e, z = p.sz + (p.z * s - p.sz) * e;
+    const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
+    const y1 = y * cx - z1 * sx, z2 = y * sx + z1 * cx;
+    const f = 2.6 / (2.6 + z2);
+    proj[i * 3] = ox + x1 * R * f; proj[i * 3 + 1] = oy + y1 * R * f; proj[i * 3 + 2] = z2;
+  }
+  // liens
+  ctx.lineWidth = 0.6;
+  ctx.strokeStyle = `rgba(${rgb},${0.10 + energy * 0.12})`;
+  ctx.beginPath();
+  for (let l = 0; l < LINKS.length; l += 2) {
+    const a = LINKS[l] * 3, b = LINKS[l + 1] * 3;
+    ctx.moveTo(proj[a], proj[a + 1]); ctx.lineTo(proj[b], proj[b + 1]);
+  }
+  ctx.stroke();
+  // points
+  for (let i = 0; i < N; i++) {
+    const z = proj[i * 3 + 2], depth = (1 - z) / 2;            // 1 = devant
+    const al = 0.15 + depth * 0.75, sz = 0.6 + depth * 1.6;
+    ctx.fillStyle = `rgba(${rgb},${al})`;
+    ctx.fillRect(proj[i * 3] - sz / 2, proj[i * 3 + 1] - sz / 2, sz, sz);
+  }
+  // anneau de scan
+  ctx.strokeStyle = `rgba(${rgb},${0.18 + energy * 0.2})`; ctx.lineWidth = 1;
+  ctx.beginPath(); ctx.arc(ox, oy, R * 1.32, t * 0.6, t * 0.6 + Math.PI * 0.5); ctx.stroke();
+  ctx.beginPath(); ctx.arc(ox, oy, R * 1.38, -t * 0.4, -t * 0.4 + Math.PI * 0.3); ctx.stroke();
+  requestAnimationFrame(drawSphere);
+}
+requestAnimationFrame(drawSphere);
+
+/* ---------------- Cinématique de démarrage ---------------- */
+const BOOT = [
+  "> J.A.R.V.I.S. // séquence de démarrage",
+  "> chargement du noyau neuronal ........ OK",
+  "> calibrage des capteurs audio ........ OK",
+  "> synchronisation horloge ............. OK",
+  "> projection holographique ............ EN COURS",
+  "> tous les systèmes sont opérationnels.",
+];
+let bootDone = false;
+function finishBoot() {
+  if (bootDone) return; bootDone = true;
+  bootT = 1; $("bootfill").style.width = "100%";
+  document.body.classList.add("ready");
+  $("boot").classList.add("gone");
+  setTimeout(() => $("boot").remove(), 900);
+}
+$("skip").onclick = finishBoot;
+if (reduce) finishBoot();
+else {
+  const start = performance.now(), DUR = 4200;
+  (function bootStep(now) {
+    if (bootDone) return;
+    const k = Math.min(1, (now - start) / DUR);
+    bootT = k;
+    $("bootfill").style.width = (k * 100).toFixed(1) + "%";
+    const lines = Math.min(BOOT.length, Math.floor(k * (BOOT.length + 0.6)));
+    const cur = BOOT[lines] || "";
+    const typed = cur.slice(0, Math.floor(((k * (BOOT.length + 0.6)) % 1) * cur.length));
+    $("bootlog").textContent = BOOT.slice(0, lines).join("\n") + (lines < BOOT.length ? "\n" + typed + "▌" : "");
+    if (k >= 1) setTimeout(finishBoot, 500); else requestAnimationFrame(bootStep);
+  })(start);
+}
 </script>
 
 </body></html>
