@@ -401,6 +401,7 @@ function goSleep() {
   setState("off", "En veille · dites « Jarvis, réveille-toi »");
 }
 function wakeUp() {
+  burst();
   sleeping = false; awakeUntil = Date.now() + 30000;
   setState("listening");
   speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur.", "Oui monsieur, je vous écoute."]));
@@ -723,7 +724,7 @@ $("core").onclick = () => {
   wokeAt = Date.now(); heardEl.textContent = "";
   if (micBlocked && inArtifact) return;
   if (sleeping) { wakeUp(); return; }
-  if (state === "off") { if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
+  if (state === "off") { burst(); if (!micStream && !inArtifact) setState("off", "Connexion au micro…"); earsWanted = true; startEars(); awakeUntil = Date.now() + 60000; speak("Bonjour monsieur. Tous les systèmes sont opérationnels. Je vous écoute."); }
   else if (state === "speaking") { stopSpeaking(); }
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
 };
@@ -814,14 +815,20 @@ let rotY = 0, rotX = 0.35, energy = 0.2, t = 0;
 let bootT = reduce ? 1 : 0;              // 0 → 1 pendant la cinématique
 const proj = new Float32Array(N * 3);
 
+let shrink = 1, burstAt = -1e9, waves = [], lastWave = 0;
+function burst() { burstAt = performance.now(); }    // explosion de particules qui se reforment
+
 function drawSphere() {
+  const nowMs = performance.now();
+  shrink += ((sleeping || state === "off" ? 0.38 : 1) - shrink) * 0.05;   // en veille : la sphère se replie en noyau
+  const bk = Math.min(1, (nowMs - burstAt) / 1400), ex = bk < 1 ? Math.pow(1 - bk, 2) * 2.4 : 0;
   const target = { off: 0.15, idle: 0.35, listening: 0.85, thinking: 0.6, speaking: 1 }[state] ?? 0.3;
   const heardBoost = Date.now() - lastHeard < 400 ? 0.4 : 0;
   energy += (target + heardBoost - energy) * 0.06;
   const speed = 0.0025 + energy * 0.007;
   rotY += reduce ? 0 : speed; t += reduce ? 0 : 0.016;
   const cy = Math.cos(rotY), sy = Math.sin(rotY), cx = Math.cos(rotX), sx = Math.sin(rotX);
-  const R = Math.min(W, H) * 0.27, ox = W / 2, oy = H * 0.48;
+  const R = Math.min(W, H) * 0.27 * shrink, ox = W / 2, oy = H * 0.48;
   const rgb = state === "thinking" ? [255, 169, 77] : state === "off" ? [70, 150, 190] : [56, 225, 255];
   const talk = state === "speaking" ? 0.07 + 0.05 * Math.sin(t * 9) : 0;
 
@@ -839,7 +846,8 @@ function drawSphere() {
     const e = 1 - Math.pow(1 - k, 3);
     const wob = 1 + talk * Math.sin(t * 14 + p.ph) + 0.02 * energy * Math.sin(t * 3 + p.ph);
     const s = p.bump * wob;
-    let x = p.sx + (p.x * s - p.sx) * e, y = p.sy + (p.y * s - p.sy) * e, z = p.sz + (p.z * s - p.sz) * e;
+    const out = 1 + ex * (0.5 + p.delay * 2);
+    let x = (p.sx + (p.x * s - p.sx) * e) * out, y = (p.sy + (p.y * s - p.sy) * e) * out, z = (p.sz + (p.z * s - p.sz) * e) * out;
     const x1 = x * cy + z * sy, z1 = -x * sy + z * cy;
     const y1 = y * cx - z1 * sx, z2 = y * sx + z1 * cx;
     const f = 2.6 / (2.6 + z2);
@@ -866,6 +874,30 @@ function drawSphere() {
       ctx.rect(proj[i * 3] - sz / 2, proj[i * 3 + 1] - sz / 2, sz, sz);
     }
     ctx.fill();
+  }
+  // ondes quand il parle
+  if (state === "speaking" && nowMs - lastWave > 420 && !reduce) { waves.push(nowMs); lastWave = nowMs; }
+  waves = waves.filter((w0) => nowMs - w0 < 1600);
+  ctx.lineWidth = 1.5;
+  for (const w0 of waves) {
+    const age = (nowMs - w0) / 1600;
+    ctx.strokeStyle = `rgba(${rgb},${0.45 * (1 - age)})`;
+    ctx.beginPath(); ctx.arc(ox, oy, R * (1.05 + age * 1.1), 0, Math.PI * 2); ctx.stroke();
+  }
+  // anneaux d'orbite quand il réfléchit
+  if (state === "thinking") {
+    for (let j = 0; j < 3; j++) {
+      const tilt = j * Math.PI / 3 + t * 0.3, rr = R * (1.15 + j * 0.08);
+      ctx.fillStyle = `rgba(${rgb},0.85)`;
+      ctx.beginPath();
+      for (let d = 0; d < 24; d++) {
+        const a = (d / 24) * Math.PI * 2 + t * (2.2 - j * 0.5) * (j % 2 ? -1 : 1);
+        const px = Math.cos(a) * rr, py = Math.sin(a) * rr * 0.32;
+        const sz = d % 6 === 0 ? 3 : 1.6;
+        ctx.rect(ox + px * Math.cos(tilt) - py * Math.sin(tilt) - sz / 2, oy + px * Math.sin(tilt) + py * Math.cos(tilt) - sz / 2, sz, sz);
+      }
+      ctx.fill();
+    }
   }
   // anneau de scan
   ctx.strokeStyle = `rgba(${rgb},${0.18 + energy * 0.2})`; ctx.lineWidth = 1;
