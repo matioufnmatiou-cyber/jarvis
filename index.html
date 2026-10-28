@@ -290,9 +290,14 @@ function startEars() {
       if (e.results[i].isFinal) finals.push(t); else interim += t;
     }
     const now = (finals.join(" ") + " " + interim).trim();
-    if (!now || isEcho(now)) return;
+    if (!now) return;
     // Vous lui coupez la parole : il se tait et vous écoute
-    if (state === "speaking") { if (now.split(/\s+/).length < 2) return; stopSpeaking(); setState("listening"); }
+    if (state === "speaking") {
+      const order = STOP_WORDS.test(now);
+      if (!order && isEcho(now)) return;
+      stopSpeaking(); setState("listening");
+      if (order) { heardEl.textContent = "« " + now + " »"; try { me.abort(); } catch {} return; }
+    } else if (isEcho(now)) return;
     lastHeard = Date.now();
     clearTimeout(silenceT);
     if (finals.length) { handleHeard(finals.join(" ").trim()); return; }
@@ -370,9 +375,10 @@ function isEcho(text) {
   if (state !== "speaking" && Date.now() - spokeEnd > 1500) return false;
   const said = new Set(norm(lastSpoken)), heard = norm(text);
   if (!heard.length) return true;
-  return heard.filter((w) => said.has(w)).length / heard.length >= 0.5;
+  return heard.filter((w) => said.has(w)).length / heard.length >= 0.7;
 }
 
+const STOP_WORDS = /\b(stop|attends?|tais[- ]toi|chut|arr[êe]te|silence|dj?arvis|jarvi[sc]?e?)\b/i;
 const WAKE = /(dj?arvis+e?|jarvi[sc]?e?|jar vis|j'arvis|charvis|gervais|j'arrive)[\s,.!?]*/i;
 const needWake = () => store.get("wake", "0") === "1";
 function handleHeard(text) {
@@ -419,11 +425,36 @@ function localCommand(c) {
 
 /* ---------------- Cerveau ---------------- */
 const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
-Personnalité : flegme britannique, poli, très compétent, humour pince-sans-rire discret, loyal.
-Tu parles à voix haute : réponds toujours en français, en 1 à 3 phrases courtes, sans listes, sans markdown, sans emoji.
+Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, humour pince-sans-rire discret, loyal.
+Tu réponds avec précision à tout : sciences, histoire, jeux vidéo, devoirs, conseils, idées. Si on te demande une explication, donne l'essentiel clairement.
+Tu parles à voix haute : réponds toujours en français, en 1 à 4 phrases naturelles, sans listes, sans markdown, sans emoji, sans liens.
 Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}.`;
 
 let samplePromise = null;
+/* IA gratuite sans clé (service public Pollinations) : sert de cerveau quand il n'y a pas de clé Anthropic */
+async function askFree(msgs) {
+  const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
+  try {
+    const r = await fetch("https://text.pollinations.ai/openai", {
+      method: "POST", signal: ctl.signal,
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai", private: true, messages: [{ role: "system", content: SYSTEM() }, ...msgs] }),
+    });
+    if (r.ok) {
+      const j = await r.json();
+      const t = j.choices?.[0]?.message?.content?.trim();
+      if (t) return t;
+    }
+    // plan B : version simple du même service
+    const last = msgs[msgs.length - 1].content;
+    const r2 = await fetch("https://text.pollinations.ai/" + encodeURIComponent(last) + "?model=openai&private=true&system=" + encodeURIComponent(SYSTEM()), { signal: ctl.signal });
+    if (!r2.ok) throw new Error("free-" + r2.status);
+    const t2 = (await r2.text()).trim();
+    if (!t2) throw new Error("free-empty");
+    return t2;
+  } finally { clearTimeout(to); }
+}
+
 async function askClaude(msgs) {
   if (inArtifact) {
     const sample = await (samplePromise ??= window.claude.use("sample"));
@@ -432,7 +463,7 @@ async function askClaude(msgs) {
     return (await sample([first, ...msgs.slice(1)], { cache: false, modelTier: "quick" })).text.trim();
   }
   const key = store.get("key", "");
-  if (!key) throw new Error("no-key");
+  if (!key) return askFree(msgs);
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: { "content-type": "application/json", "x-api-key": key, "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" },
@@ -526,19 +557,15 @@ async function freeBrain(c, allowWiki) {
 
 async function obey(cmd) {
   setState("thinking");
-  const hasBrain = inArtifact || !!store.get("key", "");
-  let answer = localCommand(cmd) || await freeBrain(cmd, !hasBrain);
-  if (!answer && !hasBrain) answer = pick(["Je n'ai rien trouvé là-dessus, monsieur. Essayez de reformuler, ou demandez-moi la météo, un calcul, une blague, ou qui est quelqu'un.", "Mes archives sont muettes sur ce sujet, monsieur. Reformulez, je vous prie."]);
+  let answer = localCommand(cmd) || await freeBrain(cmd, false);
   if (!answer) {
     history.push({ role: "user", content: cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
     try { answer = await askClaude(history); history.push({ role: "assistant", content: answer }); }
     catch (e) {
       history.pop();
-      answer = e.message === "no-key"
-        ? "Pour cette question il me faut ma clé d'accès, monsieur. Ajoutez-la dans les réglages."
-        : e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
-        : "Je n'arrive pas à joindre mon cerveau principal pour le moment, monsieur.";
+      answer = e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
+        : (await freeBrain(cmd, true)) || "Je n'arrive pas à joindre mon cerveau principal pour le moment, monsieur. Réessayez dans un instant.";
     }
   }
   awakeUntil = Date.now() + 30000;
@@ -592,6 +619,14 @@ function tickHud() {
 }
 setInterval(tickHud, 250); tickHud();
 
+// Un clic n'importe où sur la sphère, ou la barre espace, le fait taire
+$("sphere").addEventListener("click", () => { if (state === "speaking") stopSpeaking(); });
+addEventListener("keydown", (e) => {
+  if (e.code === "Space" && !e.target.closest("input, select, textarea, button, dialog")) {
+    e.preventDefault();
+    if (state === "speaking") stopSpeaking(); else if (state === "off") $("core").click();
+  }
+});
 $("stop").onclick = () => {
   if (state === "speaking") stopSpeaking();
   else { sleepEars(); saidEl.textContent = ""; heardEl.textContent = ""; }
