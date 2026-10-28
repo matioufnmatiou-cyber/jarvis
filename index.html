@@ -117,11 +117,14 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <li>« Jarvis, quelle heure est-il ? »</li>
     <li>« Jarvis, quel jour sommes-nous ? »</li>
     <li>« Jarvis, mets AC/DC sur YouTube »</li>
-    <li>« Jarvis, cherche la météo à Paris »</li>
+    <li>« Jarvis, météo à Paris »</li>
+    <li>« Jarvis, combien font 12 fois 8 ? » · « raconte une blague »</li>
+    <li>« Jarvis, qui est Albert Einstein ? » · « c'est quoi un trou noir ? »</li>
+    <li>« Jarvis, minuteur 5 minutes »</li>
     <li>« Jarvis, ouvre Netflix / Spotify / Discord… »</li>
     <li>« Jarvis, change de voix » · « plus grave » · « plus aigu »</li>
     <li>« Jarvis, en veille » pour l'arrêter</li>
-    <li>Avec la clé Anthropic : n'importe quelle question</li>
+    <li>Avec la clé Anthropic (facultative) : vraie discussion sur tout</li>
   </ul>
   <div class="row"><button class="btn" type="button" onclick="this.closest('dialog').close()">OK</button></div>
 </dialog>
@@ -152,7 +155,7 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
-    <small>Facultatif. Sans clé, Jarvis comprend les ordres simples. La clé reste dans votre navigateur.</small>
+    <small>Facultatif. Sans clé, Jarvis gère la météo, Wikipédia, les calculs, les blagues, le minuteur, YouTube et les sites. La clé ajoute une vraie discussion libre (payant).</small>
   </div>
   <div class="row">
     <button class="btn ghost" type="button" onclick="document.getElementById('helpDlg').showModal()">Liste des commandes</button>
@@ -359,7 +362,7 @@ function openUrl(url) {
 }
 const yt = (q) => "https://www.youtube.com/results?search_query=" + encodeURIComponent(q);
 const gg = (q) => "https://www.google.com/search?q=" + encodeURIComponent(q);
-const SITES = { youtube: "https://www.youtube.com", google: "https://www.google.com", netflix: "https://www.netflix.com", gmail: "https://mail.google.com", spotify: "https://open.spotify.com", twitch: "https://www.twitch.tv", tiktok: "https://www.tiktok.com", instagram: "https://www.instagram.com", wikipedia: "https://fr.wikipedia.org", amazon: "https://www.amazon.fr", "google maps": "https://www.google.com/maps", maps: "https://www.google.com/maps", chatgpt: "https://chat.openai.com", discord: "https://discord.com/app", météo: "https://www.google.com/search?q=m%C3%A9t%C3%A9o" };
+const SITES = { youtube: "https://www.youtube.com", google: "https://www.google.com", netflix: "https://www.netflix.com", gmail: "https://mail.google.com", spotify: "https://open.spotify.com", twitch: "https://www.twitch.tv", tiktok: "https://www.tiktok.com", instagram: "https://www.instagram.com", wikipedia: "https://fr.wikipedia.org", amazon: "https://www.amazon.fr", "google maps": "https://www.google.com/maps", maps: "https://www.google.com/maps", chatgpt: "https://chat.openai.com", discord: "https://discord.com/app" };
 const popupNote = " Si rien ne s'ouvre, autorisez les fenêtres pop-up pour Jarvis dans la barre d'adresse.";
 
 function localCommand(c) {
@@ -410,9 +413,92 @@ async function askClaude(msgs) {
   return j.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
 }
 
+/* ---------------- Cerveau gratuit (sans clé) ---------------- */
+const pick = (a) => a[Math.floor(Math.random() * a.length)];
+const JOKES = [
+  "Pourquoi les plongeurs plongent-ils toujours en arrière ? Parce que sinon ils tombent dans le bateau, monsieur.",
+  "J'ai essayé d'écrire une blague sur le Wi-Fi, monsieur, mais je n'ai pas réussi à établir la connexion.",
+  "Que dit une imprimante dans l'eau ? J'ai papier, monsieur.",
+  "Un électron entre dans un bar et commande un verre. Le barman demande : vous êtes sûr ? L'électron répond : je suis positif. Enfin, négatif, monsieur.",
+  "Pourquoi les squelettes ne se battent-ils jamais entre eux ? Ils n'ont pas le cran, monsieur.",
+];
+const WMO = { 0: "ciel dégagé", 1: "plutôt dégagé", 2: "partiellement nuageux", 3: "couvert", 45: "brouillard", 48: "brouillard givrant", 51: "bruine légère", 53: "bruine", 55: "forte bruine", 61: "pluie légère", 63: "pluie", 65: "forte pluie", 71: "neige légère", 73: "neige", 75: "forte neige", 80: "averses", 81: "averses", 82: "violentes averses", 95: "orages", 96: "orages avec grêle", 99: "orages avec grêle" };
+const NUM = { zéro: 0, un: 1, une: 1, deux: 2, trois: 3, quatre: 4, cinq: 5, six: 6, sept: 7, huit: 8, neuf: 9, dix: 10, onze: 11, douze: 12, quinze: 15, vingt: 20, trente: 30, quarante: 40, cinquante: 50, soixante: 60, cent: 100, mille: 1000 };
+const say = (n) => String(Math.round(n * 1000) / 1000).replace(".", ",");
+let timer = null;
+
+async function weather(city) {
+  const g = await (await fetch("https://geocoding-api.open-meteo.com/v1/search?count=1&language=fr&name=" + encodeURIComponent(city))).json();
+  const place = g.results?.[0];
+  if (!place) return `Je ne trouve pas la ville ${city}, monsieur.`;
+  const w = await (await fetch(`https://api.open-meteo.com/v1/forecast?latitude=${place.latitude}&longitude=${place.longitude}&current=temperature_2m,weather_code,wind_speed_10m&daily=temperature_2m_max,temperature_2m_min&timezone=auto&forecast_days=1`)).json();
+  const c = w.current, d = w.daily;
+  return `À ${place.name}, il fait ${Math.round(c.temperature_2m)} degrés, ${WMO[c.weather_code] || "temps variable"}, avec un vent de ${Math.round(c.wind_speed_10m)} kilomètres heure. Aujourd'hui, entre ${Math.round(d.temperature_2m_min[0])} et ${Math.round(d.temperature_2m_max[0])} degrés, monsieur.`;
+}
+
+async function wikipedia(q) {
+  const s = await (await fetch("https://fr.wikipedia.org/w/api.php?action=opensearch&limit=1&namespace=0&format=json&origin=*&search=" + encodeURIComponent(q))).json();
+  const title = s[1]?.[0];
+  if (!title) return null;
+  const sum = await (await fetch("https://fr.wikipedia.org/api/rest_v1/page/summary/" + encodeURIComponent(title))).json();
+  if (!sum.extract || sum.type === "disambiguation") return null;
+  const sentences = sum.extract.replace(/\s*\([^)]*\)/g, "").match(/[^.!?]+[.!?]+/g) || [sum.extract];
+  return "D'après mes archives, monsieur : " + sentences.slice(0, 2).join(" ").trim();
+}
+
+function calc(s) {
+  let e = " " + s.toLowerCase() + " ";
+  e = e.replace(/combien (font|fait|ça fait)|calcule|c'est combien|égal|égale|=|\?/g, " ")
+    .replace(/\bfois\b|multiplié par|\bx\b/g, "*").replace(/divisé par|sur/g, "/")
+    .replace(/\bplus\b/g, "+").replace(/\bmoins\b/g, "-").replace(/(\d),(\d)/g, "$1.$2");
+  for (const [w, n] of Object.entries(NUM)) e = e.replace(new RegExp("\\b" + w + "\\b", "g"), n);
+  const m = e.match(/racine (carrée )?de (\d+(\.\d+)?)/);
+  if (m) return `La racine carrée de ${say(+m[2])} vaut environ ${say(Math.sqrt(+m[2]))}, monsieur.`;
+  const expr = e.replace(/[^\d+\-*/.() ]/g, "").trim();
+  if (!/\d\s*[+\-*/]\s*\d/.test(expr)) return null;
+  try { const v = Function('"use strict";return (' + expr + ")")(); if (isFinite(v)) return `Cela fait ${say(v)}, monsieur.`; } catch {}
+  return null;
+}
+
+async function freeBrain(c, allowWiki) {
+  const s = c.toLowerCase().replace(/[.!?]$/, "");
+  let m;
+  if ((m = s.match(/m[ée]t[ée]o|temps qu'il fait|il fait (chaud|froid|beau)|température/))) {
+    const city = (s.match(/(?:à|a|au|en|sur|pour|de)\s+([a-zà-ÿ' -]{2,})$/) || [])[1]?.trim();
+    const where = city || store.get("city", "");
+    if (!where) return "Pour quelle ville, monsieur ? Dites par exemple : Jarvis, météo à Paris.";
+    store.set("city", where);
+    try { return await weather(where); } catch { return "Les satellites météo ne répondent pas, monsieur."; }
+  }
+  if ((m = s.match(/(?:minuteur|timer|chrono|rappelle-moi dans|préviens-moi dans)\D*(\d+|un|une|deux|trois|cinq|dix|quinze|vingt|trente)\s*(seconde|minute|heure)/))) {
+    const n = +(NUM[m[1]] ?? m[1]), ms = n * { seconde: 1e3, minute: 6e4, heure: 36e5 }[m[2]];
+    clearTimeout(timer);
+    timer = setTimeout(() => speak(`Monsieur, votre minuteur de ${n} ${m[2]}${n > 1 ? "s" : ""} est terminé.`), ms);
+    return `Minuteur réglé sur ${n} ${m[2]}${n > 1 ? "s" : ""}, monsieur.`;
+  }
+  if (/blague|fais-moi rire|drôle/.test(s)) return pick(JOKES);
+  if ((m = calc(s))) return m;
+  if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return "Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, monsieur.";
+  if (/ça va|comment vas-tu|tu vas bien/.test(s)) return pick(["Tous mes systèmes fonctionnent parfaitement, monsieur. Et vous ?", "Je me porte à merveille, monsieur. Merci de demander."]);
+  if (/merci/.test(s)) return pick(["Je vous en prie, monsieur.", "À votre service, monsieur."]);
+  if (/^(bonjour|salut|coucou|hello|yo)\b/.test(s)) return pick(["Bonjour monsieur. Que puis-je faire pour vous ?", "Monsieur. Toujours un plaisir."]);
+  if (/je t'aime|t'es le meilleur|bravo|bien joué/.test(s)) return "Vous êtes trop aimable, monsieur. Je ne fais que mon travail.";
+  if (/pile ou face/.test(s)) return Math.random() < .5 ? "Pile, monsieur." : "Face, monsieur.";
+  if ((m = s.match(/(?:nombre|chiffre) (?:au hasard |aléatoire )?entre (\d+) et (\d+)/))) { const a = +m[1], b = +m[2]; return `${a + Math.floor(Math.random() * (b - a + 1))}, monsieur.`; }
+  if (/tony stark|iron man/.test(s)) return "Monsieur Stark ? Génie, milliardaire, playboy, philanthrope. Mais c'est vous que je sers à présent, monsieur.";
+  if (allowWiki) {
+    const q = s.replace(/^(dis-moi |parle-moi de |explique-moi |c'est quoi |qu'est-ce que c'est |qu'est-ce qu'un |qu'est-ce qu'une |qui est |qui était |qui sont |c'est qui |définis |définition de |que sais-tu sur )/, "")
+      .replace(/^(le |la |les |l'|un |une |des )/, "").trim();
+    try { const w = await wikipedia(q); if (w) return w; } catch {}
+  }
+  return null;
+}
+
 async function obey(cmd) {
   setState("thinking");
-  let answer = localCommand(cmd);
+  const hasBrain = inArtifact || !!store.get("key", "");
+  let answer = localCommand(cmd) || await freeBrain(cmd, !hasBrain);
+  if (!answer && !hasBrain) answer = pick(["Je n'ai rien trouvé là-dessus, monsieur. Essayez de reformuler, ou demandez-moi la météo, un calcul, une blague, ou qui est quelqu'un.", "Mes archives sont muettes sur ce sujet, monsieur. Reformulez, je vous prie."]);
   if (!answer) {
     history.push({ role: "user", content: cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
