@@ -161,6 +161,11 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <small>Décoché : une fois réveillé, Jarvis répond à tout ce que vous dites, jusqu'à « en veille ». Avec des haut-parleurs, un casque évite qu'il s'entende lui-même.</small>
   </div>
   <div class="field">
+    <label for="pause">Attente après ma phrase : <b id="pauseVal">3</b> s</label>
+    <input id="pause" type="range" min="0.8" max="5" step="0.2" value="3">
+    <small>Jarvis attend ce temps de silence avant de répondre, pour ne pas vous couper.</small>
+  </div>
+  <div class="field">
     <label for="instant"><input type="checkbox" id="instant"> Coupure instantanée quand je parle</label>
     <small>Jarvis se tait dès qu'il entend votre voix. S'il se coupe tout seul avec des haut-parleurs, décochez ou utilisez un casque.</small>
   </div>
@@ -358,7 +363,6 @@ function startEars() {
   earsWanted = true;
   if (rec || earsPaused) return;
   const me = new SR(); rec = me; rec.lang = "fr-FR"; rec.continuous = true; rec.interimResults = true; rec.maxAlternatives = 5;
-  let silenceT = null;
   rec.onresult = (e) => {
     let interim = "", finals = [];
     for (let i = e.resultIndex; i < e.results.length; i++) {
@@ -378,11 +382,17 @@ function startEars() {
     } else if (isEcho(now)) return;
     lastHeard = Date.now();
     clearTimeout(silenceT);
-    if (finals.length) { handleHeard(finals.join(" ").trim()); return; }
-    if (sleeping) { if (WAKE_PHRASE.test(interim)) { clearTimeout(silenceT); try { me.abort(); } catch {} wakeUp(); } return; }
-    heardEl.textContent = "J'entends : « " + interim + " »";
-    // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
-    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 800);
+    if (sleeping) {
+      if (finals.length) handleHeard(finals.join(" ").trim());
+      else if (WAKE_PHRASE.test(interim)) { try { me.abort(); } catch {} wakeUp(); }
+      return;
+    }
+    // On accumule la phrase et on attend que vous ayez vraiment fini de parler
+    if (finals.length) pendingText = (pendingText + " " + finals.join(" ")).trim();
+    lastInterim = interim.trim();
+    const shown = (pendingText + " " + lastInterim).trim();
+    heardEl.textContent = "J'entends : « " + shown + " »";
+    armSilence();
   };
   rec.onerror = (e) => {
     if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
@@ -404,6 +414,22 @@ function startEars() {
   try { rec.start(); } catch (e) { sr("Écoute impossible : " + e.message); rec = null; }
   if (rec && state === "off") setState("idle");
   startVad();
+}
+
+/* Fin de phrase : on attend X secondes de silence (réglable) avant de répondre */
+let pendingText = "", lastInterim = "", silenceT = null;
+const silenceMs = () => Math.round(parseFloat(store.get("pause", "3")) * 1000);
+function armSilence(ms = silenceMs()) {
+  clearTimeout(silenceT);
+  silenceT = setTimeout(() => {
+    // si le micro capte encore votre voix, on patiente encore un peu
+    if (vad?.an && micLevel > Math.max(0.03, vad.floor * 5) && state !== "speaking") return armSilence(500);
+    const txt = (pendingText + " " + lastInterim).trim();
+    pendingText = ""; lastInterim = "";
+    if (!txt) return;
+    try { rec && rec.abort(); } catch {}
+    handleHeard(txt);
+  }, ms);
 }
 
 function sr(t) { $("srstate").textContent = "Reconnaissance vocale : " + t; }
@@ -810,6 +836,8 @@ $("core").onclick = () => {
 if (inArtifact) $("keyField").hidden = true;
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("pause").value = store.get("pause", "3"); $("pauseVal").textContent = $("pause").value;
+$("pause").oninput = () => { store.set("pause", $("pause").value); $("pauseVal").textContent = $("pause").value; };
 $("instant").checked = store.get("instant", "1") === "1";
 $("instant").onchange = () => { store.set("instant", $("instant").checked ? "1" : "0"); if ($("instant").checked) startVad(); else if (vad?.stream) { vad.stream.getTracks().forEach((t) => t.stop()); vad.an = null; vad = null; } };
 $("wake").checked = needWake();
