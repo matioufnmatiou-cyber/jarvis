@@ -160,6 +160,10 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <label for="wake"><input type="checkbox" id="wake"> Exiger de dire « Jarvis » avant chaque ordre</label>
     <small>Décoché : une fois réveillé, Jarvis répond à tout ce que vous dites, jusqu'à « en veille ». Avec des haut-parleurs, un casque évite qu'il s'entende lui-même.</small>
   </div>
+  <div class="field">
+    <label for="instant"><input type="checkbox" id="instant"> Coupure instantanée quand je parle</label>
+    <small>Jarvis se tait dès qu'il entend votre voix. S'il se coupe tout seul avec des haut-parleurs, décochez ou utilisez un casque.</small>
+  </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -217,14 +221,23 @@ $("pitch").oninput = () => store.set("pitch", $("pitch").value);
 function currentVoice() { return voices.find((v) => v.name === $("voice").value); }
 /* ---------------- Parole (interruptible) ---------------- */
 let elevenAudio = null, endSpeech = null, lastSpoken = "", spokeEnd = 0, speechId = 0, keepUtt = null;
+let held = false, holdCtl = null, holdTimer = null;   // « held » : coupé net par votre voix, en attente de confirmation
 function stopSpeaking() {
-  speechId++;
+  speechId++; held = false; holdCtl = null; clearTimeout(holdTimer);
   speechSynthesis.cancel();
   if (elevenAudio) { elevenAudio.pause(); elevenAudio = null; }
   endSpeech?.();
   if (state === "speaking") afterSpeech();
 }
 function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking" || state === "thinking") setState(sleeping ? "off" : earsWanted ? "listening" : "off"); }
+
+// Coupure instantanée : on se tait tout de suite ; si aucun mot n'arrive, on reprend la phrase
+function holdSpeech() {
+  if (held || state !== "speaking" || !holdCtl) return;
+  held = true; holdCtl.hold(); setState("listening");
+  clearTimeout(holdTimer);
+  holdTimer = setTimeout(() => { if (held) { held = false; setState("speaking"); holdCtl?.resume(); } }, 2200);
+}
 
 /* Voix ElevenLabs (facultative) : beaucoup plus réaliste ; sinon, voix du navigateur */
 async function speakEleven(text, id) {
@@ -233,7 +246,7 @@ async function speakEleven(text, id) {
   const voiceId = store.get("elVoice", "") || "onwK4e9ZLuTAKqWW03F9"; // "Daniel" : voix britannique posée
   try {
     const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 6000);
-    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_44100_128`, {
+    const r = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}?output_format=mp3_22050_32&optimize_streaming_latency=3`, {
       method: "POST", signal: ctl.signal,
       headers: { "content-type": "application/json", "xi-api-key": key },
       body: JSON.stringify({ text, model_id: "eleven_flash_v2_5" }),   // modèle rapide : réponse quasi immédiate
@@ -245,9 +258,10 @@ async function speakEleven(text, id) {
     const audio = new Audio(url); elevenAudio = audio;
     try { await audio.play(); } catch { URL.revokeObjectURL(url); elevenAudio = null; throw new Error("lecture bloquée"); }
     setState("speaking");
+    holdCtl = { hold: () => audio.pause(), resume: () => audio.play().catch(() => {}) };
     await new Promise((res) => { endSpeech = res; audio.onended = audio.onerror = res; });
     URL.revokeObjectURL(url);
-    if (id === speechId) afterSpeech();
+    if (id === speechId) { holdCtl = null; afterSpeech(); }
     return true;
   } catch (e) {
     $("srstate").textContent = "Voix ElevenLabs indisponible (" + e.message + "), voix du navigateur utilisée.";
@@ -255,40 +269,78 @@ async function speakEleven(text, id) {
   }
 }
 
-/* Voix du navigateur : phrase par phrase (démarre plus vite et évite les coupures de Chrome/Edge) */
+/* Voix du navigateur : phrase par phrase (démarre plus vite, se coupe et reprend proprement) */
 function speakBrowser(text, id) {
   return new Promise((resolve) => {
     if (!("speechSynthesis" in window) || id !== speechId) return resolve();
     const parts = (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map((x) => x.trim()).filter(Boolean);
-    let i = 0, done = false, guard = null;
-    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (id === speechId) afterSpeech(); resolve(); };
+    let i = 0, done = false, guard = null, paused = false;
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (id === speechId) { holdCtl = null; afterSpeech(); } resolve(); };
     endSpeech = finish;
     const v = currentVoice(), pitch = parseFloat($("pitch").value);
     const next = () => {
-      if (done) return;
+      if (done || paused) return;
       if (i >= parts.length || id !== speechId) return finish();
       const u = new SpeechSynthesisUtterance(parts[i++]);
       keepUtt = u;                                          // garde une référence, sinon le navigateur peut l'oublier en route
       if (v) { u.voice = v; u.lang = v.lang; } else u.lang = "fr-FR";
-      u.pitch = pitch; u.rate = 1.08;
+      u.pitch = pitch; u.rate = 1.1;
       clearTimeout(guard); guard = setTimeout(next, 2500 + u.text.length * 110);
       u.onend = u.onerror = () => { clearTimeout(guard); next(); };
       speechSynthesis.resume();
       speechSynthesis.speak(u);
     };
+    holdCtl = {
+      hold: () => { paused = true; clearTimeout(guard); i = Math.max(0, i - 1); speechSynthesis.cancel(); },  // reprendra la phrase coupée
+      resume: () => { paused = false; next(); },
+    };
     setState("speaking");
     // Chrome/Edge avalent parfois une phrase lancée juste après un cancel : on laisse un court délai
-    if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); setTimeout(next, 80); } else next();
+    if (speechSynthesis.speaking || speechSynthesis.pending) { speechSynthesis.cancel(); setTimeout(next, 60); } else next();
   });
 }
 
 async function speak(text) {
+  if (endSpeech) { const f = endSpeech; endSpeech = null; f(); }   // termine proprement la réponse précédente
+  held = false; clearTimeout(holdTimer);
   const id = ++speechId;
   saidEl.textContent = text; lastSpoken = text;
   if (await speakEleven(text, id)) return;
   if (id !== speechId) return;
   return speakBrowser(text, id);
 }
+
+/* Détecteur de voix : écoute le niveau du micro (avec annulation d'écho) pour couper Jarvis instantanément */
+let vad = null;
+async function startVad() {
+  if (vad || store.get("instant", "1") !== "1" || !navigator.mediaDevices?.getUserMedia) return;
+  vad = { pending: true };
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: false } });
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    const an = actx.createAnalyser(); an.fftSize = 1024;
+    actx.createMediaStreamSource(stream).connect(an);
+    vad = { stream, actx, an, buf: new Float32Array(1024), floor: 0.01, echo: 0, loud: 0 };
+    setInterval(vadTick, 30);
+  } catch { vad = null; }
+}
+function vadTick() {
+  if (!vad?.an) return;
+  vad.an.getFloatTimeDomainData(vad.buf);
+  let sum = 0; for (const x of vad.buf) sum += x * x;
+  const lvl = Math.sqrt(sum / vad.buf.length);
+  if (state === "speaking" && !held) {
+    // niveau habituel de l'écho de Jarvis dans le micro, appris en continu
+    vad.echo = vad.echo ? vad.echo * 0.97 + lvl * 0.03 : lvl;
+    const thr = Math.max(0.03, vad.floor * 5, vad.echo * 2.6);
+    vad.loud = lvl > thr ? vad.loud + 1 : 0;
+    if (vad.loud >= 5) { vad.loud = 0; holdSpeech(); }          // ~150 ms de voix nette
+  } else {
+    if (state !== "speaking") { vad.echo = 0; vad.floor = vad.floor * 0.98 + Math.min(lvl, 0.05) * 0.02; }
+    vad.loud = 0;
+  }
+}
+
 function nextVoice() {
   if (!pool.length) return false;
   const i = pool.findIndex((v) => v.name === $("voice").value);
@@ -314,6 +366,8 @@ function startEars() {
     }
     const now = (finals.join(" ") + " " + interim).trim();
     if (!now) return;
+    // Coupé net par votre voix : si ce sont de vrais mots, la réponse est abandonnée
+    if (held) { if (isEcho(now) && !STOP_WORDS.test(now)) return; stopSpeaking(); setState("listening"); }
     // Vous lui coupez la parole : il se tait et vous écoute
     if (state === "speaking") {
       const order = STOP_WORDS.test(now);
@@ -327,7 +381,7 @@ function startEars() {
     if (sleeping) { if (WAKE_PHRASE.test(interim)) { clearTimeout(silenceT); try { me.abort(); } catch {} wakeUp(); } return; }
     heardEl.textContent = "J'entends : « " + interim + " »";
     // Plus fluide : après 0,7 s de silence, on n'attend pas la fin officielle de la phrase
-    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 1000);
+    silenceT = setTimeout(() => { if (rec !== me) return; try { me.abort(); } catch {} handleHeard(interim.trim()); }, 800);
   };
   rec.onerror = (e) => {
     if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
@@ -348,6 +402,7 @@ function startEars() {
   rec.onspeechstart = () => sr("Voix détectée…");
   try { rec.start(); } catch (e) { sr("Écoute impossible : " + e.message); rec = null; }
   if (rec && state === "off") setState("idle");
+  startVad();
 }
 
 function sr(t) { $("srstate").textContent = "Reconnaissance vocale : " + t; }
@@ -410,7 +465,7 @@ function wakeUp() {
 // Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
 const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 function isEcho(text) {
-  if (state !== "speaking" && Date.now() - spokeEnd > 1500) return false;
+  if (state !== "speaking" && !held && Date.now() - spokeEnd > 1500) return false;
   const said = new Set(norm(lastSpoken)), heard = norm(text);
   if (!heard.length) return true;
   return heard.filter((w) => said.has(w)).length / heard.length >= 0.7;
@@ -495,7 +550,7 @@ const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome 
 Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, humour pince-sans-rire discret, loyal.
 Tu réponds avec précision à tout : sciences, histoire, jeux vidéo, devoirs, conseils, idées. Si on te demande une explication, donne l'essentiel clairement.
 Les messages viennent d'une reconnaissance vocale imparfaite et l'utilisateur articule parfois mal : s'il y a des mots bizarres ou mal compris, devine l'intention la plus probable et réponds à cela, sans le faire remarquer. Ne demande de répéter que si c'est vraiment incompréhensible.
-Tu parles à voix haute : réponds toujours en français, en 1 à 4 phrases naturelles, sans listes, sans markdown, sans emoji, sans liens.
+Tu parles à voix haute : réponds toujours en français, en 1 à 2 phrases courtes et naturelles (plus seulement si on te demande une explication), sans listes, sans markdown, sans emoji, sans liens.
 Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}.`;
 
 let samplePromise = null;
@@ -721,7 +776,7 @@ async function obey(cmd) {
   let answer = clockCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
   if (!answer) {
     // Si l'IA met du temps, Jarvis le dit au lieu de rester muet
-    const filler = setTimeout(() => { if (state === "thinking") speakBrowser(pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, 2500);
+    const filler = setTimeout(() => { if (state === "thinking") speakBrowser(pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, 1600);
     history.push({ role: "user", content: cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
     try { answer = await askClaude(history); clearTimeout(filler); history.push({ role: "assistant", content: answer }); }
@@ -754,6 +809,8 @@ $("core").onclick = () => {
 if (inArtifact) $("keyField").hidden = true;
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("instant").checked = store.get("instant", "1") === "1";
+$("instant").onchange = () => { store.set("instant", $("instant").checked ? "1" : "0"); if ($("instant").checked) startVad(); else if (vad?.stream) { vad.stream.getTracks().forEach((t) => t.stop()); vad.an = null; vad = null; } };
 $("wake").checked = needWake();
 $("wake").onchange = () => store.set("wake", $("wake").checked ? "1" : "0");
 $("elkey").value = store.get("elKey", "");
