@@ -93,22 +93,42 @@ def press(*keys, times=1):
 
 
 def run(cmd):
+    """Lance une commande Windows sans passer par cmd.exe (que l'antivirus peut bloquer)."""
     print("[pc]", cmd)
     if WINDOWS:
-        subprocess.Popen(cmd, shell=True, creationflags=0x08000000)  # sans fenêtre noire
+        subprocess.Popen(cmd, creationflags=0x08000000)  # sans fenêtre noire
 
 
 def start(target):
-    run(f'start "" "{target}"')
+    print("[app]", target)
+    if WINDOWS:
+        os.startfile(target)
+
+
+def open_jarvis():
+    """Jarvis lui-même s'ouvre dans Edge (il n'entend pas dans les autres navigateurs)."""
+    print("[jarvis]", SITE)
+    if WINDOWS:
+        try:
+            os.startfile("microsoft-edge:" + SITE)
+            return
+        except OSError:
+            pass
+    webbrowser.open(SITE)
 
 
 def open_url(url):
+    """Les sites demandés (YouTube, Google…) s'ouvrent dans Firefox."""
     print("[web]", url)
     if WINDOWS:
-        try:
-            os.startfile("microsoft-edge:" + url)   # toujours dans Edge (Jarvis n'entend pas dans les autres navigateurs)
-        except OSError:
-            os.startfile(url)
+        for exe in ("firefox.exe", os.path.expandvars(r"%ProgramFiles%\Mozilla Firefox\firefox.exe"),
+                    os.path.expandvars(r"%ProgramFiles(x86)%\Mozilla Firefox\firefox.exe")):
+            try:
+                os.startfile(exe, arguments=f'"{url}"')
+                return
+            except OSError:
+                continue
+        os.startfile(url)   # Firefox introuvable : navigateur par défaut
     else:
         webbrowser.open(url)
 
@@ -221,7 +241,13 @@ def handle(text):
         if key == "whatsapp" and WINDOWS and not find_shortcut("whatsapp"):
             open_url("https://web.whatsapp.com"); return "WhatsApp n'est pas installé sur le PC, j'ouvre WhatsApp Web, monsieur."
         if key:
-            start(APPS[key][0]); return f"J'ouvre {key.capitalize()}, monsieur."
+            try:
+                start(APPS[key][0]); return f"J'ouvre {key.capitalize()}, monsieur."
+            except OSError:
+                lnk = find_shortcut(key) if WINDOWS else None
+                if lnk:
+                    os.startfile(lnk); return f"J'ouvre {key.capitalize()}, monsieur."
+                return f"Je ne trouve pas {key.capitalize()} sur ce PC, monsieur. Il faudrait peut-être l'installer."
         if WINDOWS:
             lnk = find_shortcut(t)
             if lnk:
@@ -289,11 +315,11 @@ def main():
     except OSError:
         print("Le pont Jarvis tourne déjà.")
         if "--no-browser" not in sys.argv:
-            open_url(SITE)
+            open_jarvis()
         return
     print(f"Pont PC de Jarvis prêt sur le port {PORT}. Laisse cette fenêtre ouverte (tu peux la réduire).")
     if "--no-browser" not in sys.argv:
-        open_url(SITE)
+        open_jarvis()
     srv.serve_forever()
 
 

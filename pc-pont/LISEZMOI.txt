@@ -1,12 +1,10 @@
 JARVIS - CONTROLE DU PC
 
-1. Double-clique sur Jarvis.bat
-   (si Python n'est pas installe, le Microsoft Store s'ouvre : clique sur Obtenir, puis relance Jarvis.bat)
-2. Jarvis s'ouvre dans le navigateur. Ouvre-le dans Edge ou Chrome :
-   https://matioufnmatiou-cyber.github.io/jarvis/
-   En haut a gauche, il doit marquer "PC LIE".
-   Si le navigateur demande d'autoriser l'acces aux appareils du reseau local, clique sur Autoriser.
-3. Laisse la fenetre noire ouverte (tu peux la reduire).
+1. Double-clique sur jarvis_pont.py (il faut Python, a installer depuis le Microsoft Store).
+   Une fenetre noire dit "Pont PC de Jarvis pret" : laisse-la ouverte (tu peux la reduire).
+2. Jarvis s'ouvre dans Edge. En haut a gauche, il doit marquer "PC LIE".
+   Si Edge demande d'autoriser l'acces aux appareils du reseau local, clique sur Autoriser.
+3. Les sites que tu demandes (YouTube, Google...) s'ouvrent dans Firefox.
 
 Exemples :
   "Jarvis, ouvre WhatsApp"        "Jarvis, ferme Discord"
@@ -17,4 +15,4 @@ Exemples :
   "Jarvis, verrouille le PC"      "Jarvis, eteins le PC" (30 s, "annule l'extinction" pour arreter)
   "Jarvis, ouvre Fortnite" : marche pour toute appli du menu Demarrer.
 
-Pour qu'il demarre tout seul avec Windows : double-clique sur Demarrer-avec-Windows.bat
+Pour qu'il demarre tout seul avec Windows : double-clique une fois sur Demarrer-avec-Windows.py
