@@ -105,7 +105,10 @@ def start(target):
 def open_url(url):
     print("[web]", url)
     if WINDOWS:
-        os.startfile(url)
+        try:
+            os.startfile("microsoft-edge:" + url)   # toujours dans Edge (Jarvis n'entend pas dans les autres navigateurs)
+        except OSError:
+            os.startfile(url)
     else:
         webbrowser.open(url)
 
