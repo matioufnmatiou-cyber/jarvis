@@ -212,7 +212,7 @@ def handle(text):
         return f"Voici les résultats pour {m.group(1)}, monsieur."
 
     # fermer une appli
-    m = re.search(r"^(?:ferme|quitte|coupe|arrete|tue)\s+(?:l'appli |l'application |le |la |l'|les )?(.+)", s)
+    m = re.search(r"(?:^(?:coupe|arrete|tue)|\b(?:ferme|fermer|quitte|quitter))\s+(?:l'appli |l'application |le |la |l'|les )?(.+)", s)
     if m:
         t = m.group(1).strip()
         if re.search(r"edge|chrome|navigateur", t):
@@ -224,9 +224,9 @@ def handle(text):
         return None
 
     # ouvrir : dossier, site, appli connue, ou n'importe quelle appli du menu Démarrer
-    m = re.search(r"^(?:ouvre|ouvrir|lance|lancer|demarre|va sur|affiche|mets|met)\s+(?:moi\s+)?(?:l'appli |l'application |le site |le dossier |le |la |l'|les |mes |mon |ma )?(.+)", s)
+    m = re.search(r"(?:^(?:mets|met|affiche)|\b(?:ouvre|ouvrir|lance|lancer|demarre|demarrer|va sur))\s+(?:moi\s+)?(?:l'appli |l'application |le site |le dossier |le |la |l'|les |mes |mon |ma )?(.+)", s)
     if m:
-        t = m.group(1).strip()
+        t = re.sub(r"\s+(stp|s'il te plait|steuplait|merci)$", "", m.group(1).strip())
         for k, (sub, label) in FOLDERS.items():
             if t.startswith(k):
                 p = Path.home() / sub

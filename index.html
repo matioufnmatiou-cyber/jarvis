@@ -176,6 +176,11 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <small>Pour que Jarvis ouvre WhatsApp, Discord, tes jeux, règle le son, mette la musique en pause ou verrouille le PC : télécharge le programme PC, dézippe-le, puis double-clique sur « jarvis_pont.py ». Il faut Python (Microsoft Store).</small>
     <div class="row" style="justify-content:flex-start"><a class="btn ghost" href="https://matioufnmatiou-cyber.github.io/jarvis/pc-pont/Jarvis-PC.zip" download>Télécharger le programme PC</a></div>
   </div>
+  <div class="field">
+    <label for="gkey">Clé Google Gemini GRATUITE (cerveau intelligent)</label>
+    <input id="gkey" type="password" autocomplete="off" placeholder="AIza…">
+    <small>Gratuit, sans carte bancaire : va sur aistudio.google.com/apikey, connecte-toi avec Google, clique sur « Create API key », copie la clé et colle-la ici.</small>
+  </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
     <input id="apikey" type="password" autocomplete="off" placeholder="sk-ant-…">
@@ -598,8 +603,10 @@ function localCommand(c) {
     return openUrl(yt(m[1])) ? `Je lance ${m[1]} sur YouTube, monsieur.` : "J'ai tenté d'ouvrir YouTube, monsieur." + popupNote;
   }
   if ((m = s.match(/^(?:cherche|recherche|google)\s+(.+)/))) return openUrl(gg(m[1])) ? `Voici ce que j'ai trouvé sur ${m[1]}, monsieur.` : "J'ai tenté la recherche, monsieur." + popupNote;
-  if ((m = s.match(/^(?:ouvre|lance|va sur|affiche)\s+(.+)/))) {
-    const t = m[1].replace(/^(le site |le |la |l'|les )/, "").trim();
+  const site = Object.keys(SITES).sort((a, b) => b.length - a.length).find((k) => new RegExp("\\b" + k + "\\b").test(s));
+  if (site && /\b(ouvr\w*|lance\w*|va sur|affiche\w*|d[ée]marre\w*|mets|met|allume)\b/.test(s)) return openUrl(SITES[site]) ? `J'ouvre ${site}, monsieur.` : `J'ai tenté d'ouvrir ${site}, monsieur.` + popupNote;
+  if ((m = s.match(/\b(?:ouvre|ouvrir|lance|lancer|va sur|affiche)\s+(?:moi\s+)?(.+)/))) {
+    const t = m[1].replace(/^(le site |le |la |l'|les )/, "").replace(/\s+(stp|s'il te pla[iî]t|steuplait)$/, "").trim();
     const url = SITES[t] || (/\.[a-z]{2,}$/.test(t) ? "https://" + t.replace(/\s/g, "") : null);
     if (url) return openUrl(url) ? `J'ouvre ${t}, monsieur.` : `J'ai tenté d'ouvrir ${t}, monsieur.` + popupNote;
   }
@@ -665,6 +672,7 @@ async function askClaude(msgs) {
     return (await sample([first, ...msgs.slice(1)], { cache: false, modelTier: "quick" })).text.trim();
   }
   const key = store.get("key", "");
+  if (!key && store.get("gkey", "")) return askGemini(msgs);
   if (!key) return askFree(msgs);
   const r = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
@@ -674,6 +682,29 @@ async function askClaude(msgs) {
   if (!r.ok) throw new Error("http-" + r.status);
   const j = await r.json();
   return j.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
+}
+
+/* Google Gemini : clé gratuite (sans carte bancaire) sur aistudio.google.com */
+async function askGemini(msgs) {
+  const key = store.get("gkey", "");
+  const body = JSON.stringify({
+    systemInstruction: { parts: [{ text: SYSTEM() }] },
+    contents: msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
+    generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
+  });
+  let last = "no-brain";
+  for (const model of ["gemini-flash-latest", "gemini-2.5-flash"]) {
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${encodeURIComponent(key)}`, { method: "POST", headers: { "content-type": "application/json" }, body, signal: ctl.signal });
+      if (r.status === 400 || r.status === 403) { last = "http-401"; break; }
+      if (!r.ok) { last = "http-" + r.status; continue; }
+      const j = await r.json();
+      const txt = (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
+      if (txt) return txt;
+    } catch (e) { last = e.message; } finally { clearTimeout(to); }
+  }
+  try { return await askFree(msgs); } catch { throw new Error(last); }
 }
 
 /* ---------------- Cerveau gratuit (sans clé) ---------------- */
@@ -863,7 +894,7 @@ async function obey(cmd) {
       history.pop();
       clearTimeout(filler);
       answer = e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
-        : (await freeBrain(cmd, true)) || "Je n'arrive pas à joindre mon cerveau principal pour le moment, monsieur. Réessayez dans un instant.";
+        : (await freeBrain(cmd, true)) || "Mon cerveau en ligne ne répond pas, monsieur. Pour me rendre vraiment intelligent, ajoutez la clé Gemini gratuite dans les réglages.";
     }
   }
   awakeUntil = Date.now() + 30000;
@@ -886,6 +917,8 @@ $("core").onclick = () => {
   else { awakeUntil = Date.now() + 60000; speak("Oui monsieur ?"); }
 };
 if (inArtifact) $("keyField").hidden = true;
+$("gkey").value = store.get("gkey", "");
+$("gkey").onchange = () => store.set("gkey", $("gkey").value.trim());
 $("apikey").value = store.get("key", "");
 $("apikey").onchange = () => store.set("key", $("apikey").value.trim());
 $("pause").value = store.get("pause", "3"); $("pauseVal").textContent = $("pause").value;
