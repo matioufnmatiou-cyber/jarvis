@@ -63,6 +63,7 @@ button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px s
 
 /* Réglages */
 .btn { font-family: var(--display); font-weight: 600; letter-spacing: .1em; text-transform: uppercase; background: var(--cyan); color: var(--bg); border: 0; border-radius: 6px; padding: 10px 14px; font-size: 12px; }
+a.btn { display: inline-block; text-decoration: none; }
 .ghost { background: transparent; color: var(--cyan); border: 1px solid var(--cyan); }
 dialog { background: #061620; color: var(--fg); border: 1px solid var(--line); border-radius: 8px; width: min(92vw, 460px); max-height: 86vh; box-sizing: border-box; padding: 20px; box-shadow: 0 0 30px rgba(56, 225, 255, .2); }
 dialog::backdrop { background: rgba(0, 0, 0, .65); }
@@ -126,6 +127,7 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <li>« Jarvis, mets une alarme à 16h » · « annule l'alarme »</li>
     <li>« Jarvis, lance le chrono » · « arrête le chrono »</li>
     <li>« Jarvis, ouvre Netflix / Spotify / Discord… »</li>
+    <li>Avec le programme PC : « ouvre WhatsApp » · « ferme Discord » · « monte le son » · « coupe le son » · « mets pause » · « musique suivante » · « verrouille le PC » · « éteins le PC » · « ouvre mes téléchargements » · « capture d'écran »</li>
     <li>« Jarvis, change de voix » · « plus grave » · « plus aigu »</li>
     <li>« Jarvis, en veille » pour l'arrêter</li>
     <li>Avec la clé Anthropic (facultative) : vraie discussion sur tout</li>
@@ -168,6 +170,11 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
   <div class="field">
     <label for="instant"><input type="checkbox" id="instant"> Coupure instantanée quand je parle</label>
     <small>Jarvis se tait dès qu'il entend votre voix. S'il se coupe tout seul avec des haut-parleurs, décochez ou utilisez un casque.</small>
+  </div>
+  <div class="field">
+    <label>Contrôle du PC : <b id="pcInfo">non connecté</b></label>
+    <small>Pour que Jarvis ouvre WhatsApp, Discord, tes jeux, règle le son, mette la musique en pause ou verrouille le PC : télécharge le programme PC, dézippe-le, puis double-clique sur « Jarvis.bat ». Il faut Python (le fichier te l'installe si besoin).</small>
+    <div class="row" style="justify-content:flex-start"><a class="btn ghost" href="https://matioufnmatiou-cyber.github.io/jarvis/pc-pont/Jarvis-PC.zip" download>Télécharger le programme PC</a></div>
   </div>
   <div class="field" id="keyField">
     <label for="apikey">Clé API Anthropic (pour que Jarvis comprenne tout)</label>
@@ -599,6 +606,24 @@ function localCommand(c) {
   return null;
 }
 
+/* ---------------- Pont PC ----------------
+   Si le petit programme « Jarvis.bat » tourne sur le PC, Jarvis peut ouvrir les applis, régler le son, etc. */
+const PONT = "http://127.0.0.1:8765";
+let pcLinked = false;
+async function pingPc() {
+  try { const r = await fetch(PONT + "/ping", { signal: AbortSignal.timeout(1500) }); pcLinked = r.ok; } catch { pcLinked = false; }
+  $("pcInfo").textContent = pcLinked ? "connecté ✓" : "non connecté";
+  $("sysState").textContent = pcLinked ? "PC LIÉ" : "EN LIGNE";
+}
+async function pcCommand(cmd) {
+  if (!pcLinked) return null;
+  try {
+    const r = await fetch(PONT + "/cmd", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ text: cmd }), signal: AbortSignal.timeout(3000) });
+    return (await r.json()).say || null;
+  } catch { pingPc(); return null; }
+}
+if (!inArtifact) { pingPc(); setInterval(pingPc, 15000); }
+
 /* ---------------- Cerveau ---------------- */
 const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
 Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, loyal, et surtout plein d'humour : pince-sans-rire, ironie élégante, petites piques taquines et affectueuses envers monsieur (comme Jarvis avec Tony Stark), autodérision de machine. Glisse une touche d'humour dans la plupart des réponses, sans jamais sacrifier la bonne réponse ni être méchant.
@@ -827,7 +852,7 @@ function clockCommand(c) {
 
 async function obey(cmd) {
   setState("thinking");
-  let answer = clockCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
+  let answer = clockCommand(cmd) || await pcCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
   if (!answer) {
     // Si l'IA met du temps, Jarvis le dit au lieu de rester muet
     const filler = setTimeout(() => { if (state === "thinking") speakBrowser(pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, 1600);
