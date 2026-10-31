@@ -251,6 +251,11 @@ function hush() {
   try { speechSynthesis.cancel(); } catch {}
   if (elevenAudio) { try { elevenAudio.pause(); } catch {} elevenAudio = null; }
 }
+// Ce que le micro a capté pendant que Jarvis parlait, c'est surtout sa propre voix : on l'oublie
+function flushEcho() {
+  clearTimeout(silenceT); pendingText = ""; lastInterim = "";
+  if (rec) { try { rec.abort(); } catch {} }      // repart sur une écoute propre
+}
 function afterSpeech() { spokeEnd = Date.now(); endSpeech = null; if (state === "speaking" || state === "thinking") setState(sleeping ? "off" : earsWanted ? "listening" : "off"); }
 
 // Coupure instantanée : on se tait tout de suite ; si aucun mot n'arrive, on reprend la phrase
@@ -293,7 +298,7 @@ async function speakEleven(text, id) {
     holdCtl = { hold: () => audio.pause(), resume: () => audio.play().catch(() => {}) };
     await new Promise((res) => { endSpeech = res; audio.onended = audio.onerror = res; });
     URL.revokeObjectURL(url);
-    if (id === speechId) { holdCtl = null; afterSpeech(); }
+    if (id === speechId) { holdCtl = null; flushEcho(); afterSpeech(); }
     return true;
   } catch (e) {
     $("srstate").textContent = "Voix ElevenLabs indisponible (" + e.message + "), voix du navigateur utilisée.";
@@ -307,7 +312,7 @@ function speakBrowser(text, id) {
     if (!("speechSynthesis" in window) || id !== speechId) return resolve();
     const parts = (text.match(/[^.!?…]+[.!?…]*/g) || [text]).map((x) => x.trim()).filter(Boolean);
     let i = 0, done = false, guard = null, paused = false;
-    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (id === speechId) { holdCtl = null; afterSpeech(); } resolve(); };
+    const finish = () => { if (done) return; done = true; clearTimeout(guard); if (id === speechId) { holdCtl = null; flushEcho(); afterSpeech(); } resolve(); };
     endSpeech = finish;
     const v = currentVoice(), pitch = parseFloat($("pitch").value);
     const next = () => {
@@ -411,11 +416,13 @@ function startEars() {
     const now = (finals.join(" ") + " " + interim).trim();
     if (!now) return;
     // Coupé net par votre voix : si ce sont de vrais mots, la réponse est abandonnée
-    if (held) { if (isEcho(now) && !STOP_WORDS.test(now)) return; stopSpeaking(); setState("listening"); }
+    if (held) { if (isEcho(now) && !isOrder(now)) return; stopSpeaking(); setState("listening"); }
     // Vous lui coupez la parole : il se tait et vous écoute
     if (state === "speaking") {
-      const order = STOP_WORDS.test(now);
-      if (!order && isEcho(now)) return;
+      const order = isOrder(now);
+      // pendant qu'il parle, il ne s'arrête que pour un ordre, ou pour une vraie voix plus forte que la sienne
+      const loud = vad?.an && micLevel > Math.max(0.04, (vad.echo || 0) * 3);
+      if (!order && (isEcho(now) || (vad?.an && !loud))) return;
       stopSpeaking(); setState("listening");
       if (order) { heardEl.textContent = "« " + now + " »"; try { me.abort(); } catch {} return; }
     } else if (isEcho(now)) return;
@@ -531,10 +538,17 @@ function wakeUp() {
 // Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
 const norm = (t) => t.toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9 ]/g, " ").split(/\s+/).filter((w) => w.length > 2);
 function isEcho(text) {
-  if (state !== "speaking" && !held && Date.now() - spokeEnd > 1500) return false;
-  const said = new Set(norm(lastSpoken)), heard = norm(text);
+  if (state !== "speaking" && !held && Date.now() - spokeEnd > 2500) return false;
+  const said = norm(lastSpoken), heard = norm(text);
   if (!heard.length) return true;
-  return heard.filter((w) => said.has(w)).length / heard.length >= 0.7;
+  const full = new Set(said), stem = new Set(said.map((w) => w.slice(0, 4)));
+  const hits = heard.filter((w) => full.has(w) || stem.has(w.slice(0, 4))).length;
+  return hits / heard.length >= 0.5;
+}
+// un mot d'arrêt compte seulement si Jarvis ne vient pas de le dire lui-même
+function isOrder(text) {
+  const m = text.match(STOP_WORDS);
+  return !!m && !norm(lastSpoken).some((w) => w.slice(0, 4) === norm(m[0])[0]?.slice(0, 4));
 }
 
 const STOP_WORDS = /\b(stop|attends?|tais[- ]toi|chut|arr[êe]te|silence|dj?arvis|jarvi[sc]?e?)\b/i;
