@@ -163,8 +163,8 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
     <small>Décoché : une fois réveillé, Jarvis répond à tout ce que vous dites, jusqu'à « en veille ». Avec des haut-parleurs, un casque évite qu'il s'entende lui-même.</small>
   </div>
   <div class="field">
-    <label for="pause">Attente après ma phrase : <b id="pauseVal">3</b> s</label>
-    <input id="pause" type="range" min="0.8" max="5" step="0.2" value="3">
+    <label for="pause">Attente après ma phrase : <b id="pauseVal">1</b> s</label>
+    <input id="pause" type="range" min="0.4" max="4" step="0.2" value="1">
     <small>Jarvis attend ce temps de silence avant de répondre, pour ne pas vous couper.</small>
   </div>
   <div class="field">
@@ -431,7 +431,7 @@ function startEars() {
     lastInterim = interim.trim();
     const shown = (pendingText + " " + lastInterim).trim();
     heardEl.textContent = "J'entends : « " + shown + " »";
-    armSilence();
+    armSilence(lastInterim ? silenceMs() + 1200 : silenceMs());
   };
   rec.onerror = (e) => {
     if (e.error !== "aborted" && e.error !== "no-speech") sr("Erreur : " + e.error);
@@ -457,7 +457,7 @@ function startEars() {
 
 /* Fin de phrase : on attend X secondes de silence (réglable) avant de répondre */
 let pendingText = "", lastInterim = "", silenceT = null;
-const silenceMs = () => Math.round(parseFloat(store.get("pause", "3")) * 1000);
+const silenceMs = () => Math.round(parseFloat(store.get("pause2", "1")) * 1000);
 function armSilence(ms = silenceMs()) {
   clearTimeout(silenceT);
   silenceT = setTimeout(() => {
@@ -688,32 +688,44 @@ let gErr = "";
 /* Google Gemini : clé gratuite (sans carte bancaire) sur aistudio.google.com */
 async function askGemini(msgs) {
   const key = store.get("gkey", "");
-  const body = JSON.stringify({
+  const base = {
     systemInstruction: { parts: [{ text: SYSTEM() }] },
     contents: msgs.map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.content }] })),
-    generationConfig: { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } },
-  });
-  let last = "no-brain";
+  };
+  // modèles rapides d'abord, sans « réflexion » (c'est elle qui fait attendre)
+  const MODELS = [
+    ["gemini-flash-lite-latest", { maxOutputTokens: 300 }],
+    ["gemini-flash-latest", { maxOutputTokens: 300, thinkingConfig: { thinkingLevel: "minimal" } }],
+    ["gemini-2.5-flash", { maxOutputTokens: 300, thinkingConfig: { thinkingBudget: 0 } }],
+    ["gemini-flash-latest", { maxOutputTokens: 300 }],
+  ];
   // anciennes clés « AIza… » dans l'adresse, nouvelles clés « AQ.… » dans l'en-tête
-  const auths = key.startsWith("AIza") ? [["?key=" + encodeURIComponent(key), {}], ["", { "x-goog-api-key": key }]]
-    : [["", { "x-goog-api-key": key }], ["?key=" + encodeURIComponent(key), {}], ["", { authorization: "Bearer " + key }]];
-  outer: for (const model of ["gemini-flash-latest", "gemini-2.5-flash"]) {
-    for (const [q, h] of auths) {
-      const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
-      try {
-        const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${q}`, { method: "POST", headers: { "content-type": "application/json", ...h }, body, signal: ctl.signal });
-        if (!r.ok) {   // on affiche l'erreur exacte de Google pour comprendre
-          const err = await r.json().catch(() => ({}));
-          gErr = `Gemini ${model} : ${r.status} ${err.error?.status || ""} ${err.error?.message || ""}`.slice(0, 260);
-          $("srstate").textContent = gErr; console.warn(gErr);
-        }
-        if (r.status === 400 || r.status === 401 || r.status === 403) { last = "http-401"; continue; }   // essaie l'autre façon de donner la clé
-        if (!r.ok) { last = "http-" + r.status; continue outer; }
-        const j = await r.json();
-        const txt = (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").trim();
-        if (txt) return txt;
-      } catch (e) { last = e.message; gErr = "Gemini injoignable : " + e.message; $("srstate").textContent = gErr; } finally { clearTimeout(to); }
-    }
+  const AUTHS = [["", { "x-goog-api-key": key }], ["?key=" + encodeURIComponent(key), {}], ["", { authorization: "Bearer " + key }]];
+  let combos = [];
+  for (let m = 0; m < MODELS.length; m++) for (let a = 0; a < AUTHS.length; a++) combos.push(m + "," + a);
+  const ok = store.get("gok", "");                       // la combinaison qui a marché la dernière fois passe en premier : une seule requête
+  if (combos.includes(ok)) combos = [ok, ...combos.filter((c) => c !== ok)];
+  let last = "no-brain";
+  const badModel = new Set();
+  for (const c of combos) {
+    const [mi, ai] = c.split(",").map(Number), [model, gen] = MODELS[mi], [q, h] = AUTHS[ai];
+    if (badModel.has(mi)) continue;
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    try {
+      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${q}`, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ ...base, generationConfig: gen }), signal: ctl.signal });
+      if (!r.ok) {   // on affiche l'erreur exacte de Google pour comprendre
+        const err = await r.json().catch(() => ({}));
+        gErr = `Gemini ${model} : ${r.status} ${err.error?.status || ""} ${err.error?.message || ""}`.slice(0, 260);
+        $("srstate").textContent = gErr; console.warn(gErr);
+        last = r.status === 401 || r.status === 403 ? "http-401" : "http-" + r.status;
+        if (c === ok) store.set("gok", "");
+        if (r.status === 404) badModel.add(mi);   // modèle inconnu : inutile d'essayer les autres façons de donner la clé
+        continue;
+      }
+      const j = await r.json();
+      const txt = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
+      if (txt) { store.set("gok", c); gErr = ""; return txt; }
+    } catch (e) { last = e.message; gErr = "Gemini injoignable : " + e.message; $("srstate").textContent = gErr; } finally { clearTimeout(to); }
   }
   try { return await askFree(msgs); } catch { throw new Error(last); }
 }
@@ -940,8 +952,8 @@ $("apikey").oninput = $("apikey").onchange = () => {
   if (/^(AIza|AQ\.)/.test(v)) { $("gkey").value = v; store.set("gkey", v); $("apikey").value = ""; store.set("key", ""); return; }   // clé Google collée dans la mauvaise case
   store.set("key", v);
 };
-$("pause").value = store.get("pause", "3"); $("pauseVal").textContent = $("pause").value;
-$("pause").oninput = () => { store.set("pause", $("pause").value); $("pauseVal").textContent = $("pause").value; };
+$("pause").value = store.get("pause2", "1"); $("pauseVal").textContent = $("pause").value;
+$("pause").oninput = () => { store.set("pause2", $("pause").value); $("pauseVal").textContent = $("pause").value; };
 $("instant").checked = store.get("instant", "1") === "1";
 $("instant").onchange = () => { store.set("instant", $("instant").checked ? "1" : "0"); if ($("instant").checked) startVad(); else if (vad?.stream) { vad.stream.getTracks().forEach((t) => t.stop()); vad.an = null; vad = null; } };
 $("wake").checked = needWake();
