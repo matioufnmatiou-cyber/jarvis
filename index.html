@@ -906,7 +906,7 @@ async function obey(cmd) {
       history.pop();
       clearTimeout(filler);
       answer = e.message === "http-401" ? "Ma clé d'accès semble invalide, monsieur."
-        : (await freeBrain(cmd, true)) || "Mon cerveau en ligne ne répond pas, monsieur. Pour me rendre vraiment intelligent, ajoutez la clé Gemini gratuite dans les réglages.";
+        : (await freeBrain(cmd, true)) || (store.get("gkey", "") ? "Google ne répond pas à ma clé Gemini, monsieur. Regardez le message entre crochets sous la sphère." : "Je ne trouve aucune clé Gemini enregistrée, monsieur. Collez-la dans les réglages, dans la case Gemini, puis cliquez sur OK.");
     }
   }
   awakeUntil = Date.now() + 30000;
@@ -933,9 +933,13 @@ $("core").onclick = () => {
 };
 if (inArtifact) $("keyField").hidden = true;
 $("gkey").value = store.get("gkey", "");
-$("gkey").onchange = () => store.set("gkey", $("gkey").value.trim());
+$("gkey").oninput = $("gkey").onchange = () => store.set("gkey", $("gkey").value.trim());
 $("apikey").value = store.get("key", "");
-$("apikey").onchange = () => store.set("key", $("apikey").value.trim());
+$("apikey").oninput = $("apikey").onchange = () => {
+  const v = $("apikey").value.trim();
+  if (/^(AIza|AQ\.)/.test(v)) { $("gkey").value = v; store.set("gkey", v); $("apikey").value = ""; store.set("key", ""); return; }   // clé Google collée dans la mauvaise case
+  store.set("key", v);
+};
 $("pause").value = store.get("pause", "3"); $("pauseVal").textContent = $("pause").value;
 $("pause").oninput = () => { store.set("pause", $("pause").value); $("pauseVal").textContent = $("pause").value; };
 $("instant").checked = store.get("instant", "1") === "1";
