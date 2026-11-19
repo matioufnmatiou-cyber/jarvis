@@ -17,6 +17,7 @@ import sys
 import time
 import unicodedata
 import urllib.parse
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -133,6 +134,45 @@ def open_url(url):
         webbrowser.open(url)
 
 
+def first_video(q):
+    """Trouve la 1re vidéo YouTube pour lancer directement la musique (sinon page de recherche)."""
+    try:
+        req = urllib.request.Request(
+            "https://www.youtube.com/results?hl=fr&search_query=" + urllib.parse.quote(q),
+            headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)", "Accept-Language": "fr-FR,fr",
+                     "Cookie": "SOCS=CAI; CONSENT=YES+cb"})
+        html = urllib.request.urlopen(req, timeout=6).read().decode("utf-8", "ignore")
+        m = re.search(r'"videoId":"([\w-]{11})"', html)
+        if m:
+            return "https://www.youtube.com/watch?v=" + m.group(1)
+    except Exception as e:
+        print("[youtube]", e)
+    return "https://www.youtube.com/results?search_query=" + urllib.parse.quote(q)
+
+
+def play_music(q, where=""):
+    q = re.sub(r"^(de la |de l'|du |des |de |d'|la |le |les |une |un |l')", "", q.strip()).strip()
+    if "spotify" in where:
+        start("spotify:search:" + q if q else "spotify:")
+        return f"J'ouvre {q or 'Spotify'} sur Spotify, monsieur."
+    if not q:
+        open_url(first_video("playlist musique du moment"))
+        return "Voici de la musique, monsieur."
+    open_url(first_video(q))
+    return f"Je mets {q}, monsieur."
+
+
+SOCIAL = {
+    "tiktok": "https://www.tiktok.com/search?q=", "instagram": "https://www.instagram.com/explore/search/keyword/?q=",
+    "insta": "https://www.instagram.com/explore/search/keyword/?q=", "twitter": "https://x.com/search?q=",
+    "x": "https://x.com/search?q=", "facebook": "https://www.facebook.com/search/top?q=",
+    "reddit": "https://www.reddit.com/search/?q=", "twitch": "https://www.twitch.tv/search?term=",
+    "pinterest": "https://www.pinterest.com/search/pins/?q=", "google": "https://www.google.com/search?q=",
+    "google images": "https://www.google.com/search?tbm=isch&q=", "youtube": "https://www.youtube.com/results?search_query=",
+    "wikipedia": "https://fr.wikipedia.org/w/index.php?search=", "amazon": "https://www.amazon.fr/s?k=",
+}
+
+
 def find_shortcut(name):
     """Cherche une appli dans le menu Démarrer par son nom (ex. « fortnite »)."""
     roots = [os.path.expandvars(r"%APPDATA%\Microsoft\Windows\Start Menu\Programs"),
@@ -167,11 +207,11 @@ def handle(text):
 
     # son
     if re.search(r"(coupe|enleve|desactive|mute)\w* (le )?(son|volume)|mode muet", s):
-        press("mute"); return "Son coupé, monsieur. Le silence est d'or."
+        press("mute"); return "Son coupé, monsieur."
     if re.search(r"(remet|reactive)\w* (le )?son", s):
         press("mute"); return "Le son est de retour, monsieur."
     if re.search(r"(volume|son) (a fond|au max)|(met|mets) (le son|le volume) (a fond|au max)", s):
-        press("vol_up", times=50); return "Volume au maximum, monsieur. Pensez à vos voisins."
+        press("vol_up", times=50); return "Volume au maximum, monsieur."
     if re.search(r"(monte|augmente|plus fort|hausse)", s) and re.search(r"son|volume|fort", s):
         press("vol_up", times=5); return "Volume augmenté, monsieur."
     if re.search(r"(baisse|diminue|moins fort)", s) and re.search(r"son|volume|fort", s):
@@ -182,30 +222,41 @@ def handle(text):
         press("next"); return "Morceau suivant, monsieur."
     if re.search(r"(musique|chanson|piste|video) precedente|reviens (a la )?(chanson|musique)", s):
         press("prev"); press("prev"); return "Morceau précédent, monsieur."
-    if re.search(r"(pause|reprend\w*|relance\w*|arrete\w*|met\w* pause|play)\b.*(musique|chanson|video|lecture|spotify|son)|^(pause|play|reprends)$", s):
+    if re.search(r"(pause|reprend\w*|relance\w*|arrete\w*|met\w* pause|play)\b.*(musique|chanson|video|lecture|spotify|son)|^(pause|play|reprends)$|^(mets|met|fais)\w* (la |en )?pause", s):
         press("play"); return "C'est fait, monsieur."
 
     # PC entier
     if re.search(r"(annule|stop|arrete)\w* (l'|le |la )?(extinction|redemarrage|arret)", s):
-        run("shutdown /a"); return "Extinction annulée, monsieur. Vous m'avez fait peur."
+        run("shutdown /a"); return "Extinction annulée, monsieur."
     if re.search(rf"(eteins|eteint|eteindre|arrete|ferme)\w* (le |l'|mon )?{pc}", s):
         run("shutdown /s /t 30"); return "J'éteins le PC dans trente secondes, monsieur. Dites « annule l'extinction » si vous changez d'avis."
     if re.search(rf"redemarre\w* (le |l'|mon )?{pc}", s):
         run("shutdown /r /t 30"); return "Redémarrage dans trente secondes, monsieur. Dites « annule le redémarrage » pour l'arrêter."
     if re.search(rf"(verrouille|bloque)\w* (le |l'|mon )?({pc}|ecran|session)", s):
-        run("rundll32.exe user32.dll,LockWorkStation"); return "PC verrouillé, monsieur. Personne ne passera."
+        run("rundll32.exe user32.dll,LockWorkStation"); return "PC verrouillé, monsieur."
     if re.search(rf"(met|mets|passe)\w* (le |l'|mon )?{pc} en veille", s):
-        run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0"); return "Mise en veille du PC, monsieur. Bonne nuit à lui."
+        run("rundll32.exe powrprof.dll,SetSuspendState 0,1,0"); return "Mise en veille du PC, monsieur."
     if re.search(r"capture d'ecran|screenshot|capture (l'|de l')?ecran", s):
         press("win", "snap"); return "Capture d'écran enregistrée dans Images, Captures d'écran, monsieur."
     if re.search(r"(montre|affiche|va sur) (le )?bureau|reduis tout|cache tout", s):
         press("win", "d"); return "Voici le bureau, monsieur."
 
-    # YouTube / recherche
-    m = re.search(r"(?:mets|met|joue|lance|passe|cherche|ouvre)\s+(.+?)\s+sur youtube", low) or re.search(r"^youtube\s+(.+)", low)
+    # musique : « mets Ninho », « joue du rap », « mets de la musique », « mets X sur Spotify »
+    sites = "|".join(sorted(map(re.escape, SOCIAL), key=len, reverse=True))
+    m = re.search(r"(?:cherche|recherche|regarde|trouve|tape|montre)\w*(?:[- ]moi)?\s+(.+?)\s+(?:sur|dans) (" + sites + r")\b", low)
+    if m and m.group(2) != "youtube" or (m and re.search(r"cherche|recherche|regarde|trouve|montre", low)):
+        q, site = m.group(1), m.group(2)
+        open_url(SOCIAL[site] + urllib.parse.quote(q))
+        return f"Voici {q} sur {site.capitalize()}, monsieur."
+    m = re.search(r"(?:mets|met|joue|lance|passe|ecoute)\w*(?:[- ]moi)?\s+(.+?)\s+sur (youtube|spotify)", low)
     if m:
-        open_url("https://www.youtube.com/results?search_query=" + urllib.parse.quote(m.group(1)))
-        return f"Je lance {m.group(1)} sur YouTube, monsieur."
+        return play_music(m.group(1), m.group(2))
+    m = re.search(r"(?:mets|met|joue|lance|passe|ecoute)\w*(?:[- ]moi)?\s+(?:de la |une |la |du |des |un |le |ma |mes )?(?:musique|chanson|son|playlist|morceau|titre|album|zik|music)s?\b\s*(.*)", low)
+    if m:
+        return play_music(m.group(1))
+    m = re.search(r"^(?:joue|passe|ecoute|écoute)\w*(?:[- ]moi)?\s+(.+)", low)
+    if m and not re.search(r"chanson suivante|musique suivante|pause", s):
+        return play_music(m.group(1))
     m = re.search(r"^(?:cherche|recherche|google)\s+(.+?)(?:\s+sur google)?$", low)
     if m:
         open_url("https://www.google.com/search?q=" + urllib.parse.quote(m.group(1)))
@@ -216,7 +267,7 @@ def handle(text):
     if m:
         t = m.group(1).strip()
         if re.search(r"edge|chrome|navigateur", t):
-            return "Je préfère ne pas fermer le navigateur dans lequel je vis, monsieur. Question de survie."
+            return "Je préfère ne pas fermer le navigateur dans lequel je vis, monsieur."
         key = pick_app(t)
         if key and APPS[key][1]:
             run(f"taskkill /im {APPS[key][1]} /f")
@@ -254,6 +305,8 @@ def handle(text):
                 os.startfile(lnk); return f"J'ouvre {Path(lnk).stem}, monsieur."
         if re.search(r"\.[a-z]{2,}$", t):
             open_url("https://" + t.replace(" ", "")); return f"J'ouvre {t}, monsieur."
+        if re.match(r"^(mets|met|lance|lancer)\b", s) and not re.search(r"alarme|minuteur|chrono|reveil|rappel|veille", s):
+            return play_music(m.group(1).strip())   # « mets Ninho » : c'est de la musique
         return None
     return None
 

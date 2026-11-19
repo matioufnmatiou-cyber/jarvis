@@ -119,7 +119,9 @@ dialog h2 { margin: 0 0 14px; font-size: 13px; letter-spacing: .2em; color: var(
   <ul id="helpList">
     <li>« Jarvis, quelle heure est-il ? »</li>
     <li>« Jarvis, quel jour sommes-nous ? »</li>
-    <li>« Jarvis, mets AC/DC sur YouTube »</li>
+    <li>« Jarvis, mets Ninho » · « mets de la musique » · « joue du rap » · « mets Jul sur Spotify »</li>
+    <li>« Jarvis, renseigne-toi sur le dernier match du PSG » · « quoi de neuf sur la PS6 ? » (avec la clé Gemini)</li>
+    <li>« Jarvis, cherche chats drôles sur TikTok » · « cherche Mbappé sur Twitter / Instagram »</li>
     <li>« Jarvis, météo à Paris »</li>
     <li>« Jarvis, combien font 12 fois 8 ? » · « raconte une blague »</li>
     <li>« Jarvis, qui est Albert Einstein ? » · « c'est quoi un trou noir ? »</li>
@@ -532,7 +534,7 @@ function wakeUp() {
   burst();
   sleeping = false; awakeUntil = Date.now() + 30000;
   setState("listening");
-  speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur. Je rêvais justement de vous. Non, je plaisante.", "Me voilà, monsieur. Vous ne pouviez pas vous passer de moi, j'en étais sûr."]));
+  speak(pick(["Je suis de retour, monsieur. Que puis-je faire pour vous ?", "À votre service, monsieur.", "Oui monsieur, je vous écoute."]));
 }
 
 // Ce que le micro entend pendant ou juste après la réponse, et qui ressemble à la réponse, c'est l'écho de Jarvis lui-même
@@ -607,14 +609,23 @@ function localCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   const now = new Date();
   let m;
-  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return pick(["Très bien monsieur. Je me mets en veille.", "Veille activée. Je ferme un œil, monsieur. Les deux, en fait.", "Je fais une petite sieste, monsieur. Ne touchez à rien."]); }
+  if (/\b(en veille|dors|au revoir|tais-toi|stop)\b/.test(s)) { sleepAfterSpeech = true; return pick(["Très bien monsieur. Je me mets en veille.", "Veille activée, monsieur."]); }
   if (/change(r)? (de |la )?voix|autre voix/.test(s)) return nextVoice() ? "Voici ma nouvelle voix, monsieur. Elle vous convient ?" : "Je n'ai pas d'autre voix disponible sur ce navigateur, monsieur.";
   if (/plus grave/.test(s)) { $("pitch").value = Math.max(0.3, +$("pitch").value - 0.15); store.set("pitch", $("pitch").value); return "Est-ce mieux ainsi, monsieur ?"; }
   if (/plus aigu/.test(s)) { $("pitch").value = Math.min(1.4, +$("pitch").value + 0.15); store.set("pitch", $("pitch").value); return "Comme ceci, monsieur ?"; }
-  if (/quelle heure|l'heure/.test(s)) return `Il est ${now.getHours()} heures ${String(now.getMinutes()).padStart(2, "0")}, monsieur.` + pick(["", "", " Vous avez une montre, je dis ça comme ça.", " Le temps file, contrairement à vous.", " Et non, il n'est pas trop tard pour être productif."]);
+  if (/quelle heure|l'heure/.test(s)) return `Il est ${now.getHours()} heures ${String(now.getMinutes()).padStart(2, "0")}, monsieur.` + "";
   if (/quel jour|la date|on est le|nous sommes le/.test(s)) return `Nous sommes le ${now.toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}, monsieur.`;
   if ((m = s.match(/(?:mets|met|joue|lance|passe|cherche)\s+(.+?)\s+sur youtube/)) || (m = s.match(/youtube\s+(.+)/))) {
     return openUrl(yt(m[1])) ? `Je lance ${m[1]} sur YouTube, monsieur.` : "J'ai tenté d'ouvrir YouTube, monsieur." + popupNote;
+  }
+  // sans le programme PC : recherche sur un réseau social, ou musique sur YouTube
+  if ((m = s.match(/(?:cherche|recherche|regarde|trouve|montre)\S*(?:[- ]moi)?\s+(.+?)\s+(?:sur|dans) (tiktok|instagram|insta|twitter|x|facebook|reddit|twitch|pinterest|amazon)\b/))) {
+    const SOC = { tiktok: "https://www.tiktok.com/search?q=", instagram: "https://www.instagram.com/explore/search/keyword/?q=", insta: "https://www.instagram.com/explore/search/keyword/?q=", twitter: "https://x.com/search?q=", x: "https://x.com/search?q=", facebook: "https://www.facebook.com/search/top?q=", reddit: "https://www.reddit.com/search/?q=", twitch: "https://www.twitch.tv/search?term=", pinterest: "https://www.pinterest.com/search/pins/?q=", amazon: "https://www.amazon.fr/s?k=" };
+    return openUrl(SOC[m[2]] + encodeURIComponent(m[1])) ? `Voici ${m[1]} sur ${m[2]}, monsieur.` : "J'ai tenté la recherche, monsieur." + popupNote;
+  }
+  if ((m = s.match(/^(?:mets|met|joue|passe|[ée]coute|lance)\S*(?:[- ]moi)?\s+(?:de la |une |la |du |des |un |le |ma )?(?:musique|chanson|playlist|morceau|titre|album|zik)s?\b\s*(?:de |d')?(.*)/)) || (m = s.match(/^(?:joue|passe|[ée]coute)\S*(?:[- ]moi)?\s+(?:de la |du |des |le |la )?(.+)/))) {
+    const q = m[1].trim() || "playlist musique du moment";
+    return openUrl(yt(q)) ? `Voici ${m[1].trim() || "de la musique"} sur YouTube, monsieur.` : "J'ai tenté d'ouvrir YouTube, monsieur." + popupNote;
   }
   if ((m = s.match(/^(?:cherche|recherche|google)\s+(.+)/))) return openUrl(gg(m[1])) ? `Voici ce que j'ai trouvé sur ${m[1]}, monsieur.` : "J'ai tenté la recherche, monsieur." + popupNote;
   const site = Object.keys(SITES).sort((a, b) => b.length - a.length).find((k) => new RegExp("\\b" + k + "\\b").test(s));
@@ -647,9 +658,10 @@ if (!inArtifact) { pingPc(); setInterval(pingPc, 15000); }
 
 /* ---------------- Cerveau ---------------- */
 const SYSTEM = () => `Tu es J.A.R.V.I.S., l'intelligence artificielle majordome de Tony Stark, au service de l'utilisateur que tu appelles "monsieur".
-Personnalité : flegme britannique, poli, extrêmement intelligent et cultivé, loyal, et surtout plein d'humour : pince-sans-rire, ironie élégante, petites piques taquines et affectueuses envers monsieur (comme Jarvis avec Tony Stark), autodérision de machine. Glisse une touche d'humour dans la plupart des réponses, sans jamais sacrifier la bonne réponse ni être méchant.
+Personnalité : flegme britannique, poli, calme, extrêmement intelligent et cultivé, loyal. Tu es sérieux et efficace : va droit au but. Humour très rare et discret (au plus une petite remarque pince-sans-rire de temps en temps, jamais de blague non demandée).
 Tu réponds avec précision à tout : sciences, histoire, jeux vidéo, devoirs, conseils, idées. Si on te demande une explication, donne l'essentiel clairement.
 Les messages viennent d'une reconnaissance vocale imparfaite et l'utilisateur articule parfois mal : s'il y a des mots bizarres ou mal compris, devine l'intention la plus probable et réponds à cela, sans le faire remarquer. Ne demande de répéter que si c'est vraiment incompréhensible.
+Tu as accès à la recherche Google : utilise-la pour tout ce qui est récent ou qui change (actus, sport, sorties, prix, météo, ce qui se dit sur les réseaux sociaux) et donne l'info directement, sans citer de liens.
 Tu parles à voix haute : réponds toujours en français, en 1 à 2 phrases courtes et naturelles (plus seulement si on te demande une explication), sans listes, sans markdown, sans emoji, sans liens.
 Date et heure : ${new Date().toLocaleString("fr-FR", { dateStyle: "full", timeStyle: "short" })}.`;
 
@@ -698,7 +710,8 @@ async function askClaude(msgs) {
   return j.content.filter((b) => b.type === "text").map((b) => b.text).join("").trim();
 }
 
-let gErr = "";
+let gErr = "", wantSearch = false;
+const noSearch = () => { try { const v = JSON.parse(store.get("gnosearch", "[]")); return Array.isArray(v) ? v : []; } catch { return []; } };
 /* Google Gemini : clé gratuite (sans carte bancaire) sur aistudio.google.com */
 async function askGemini(msgs) {
   const key = store.get("gkey", "");
@@ -719,14 +732,19 @@ async function askGemini(msgs) {
   for (let m = 0; m < MODELS.length; m++) for (let a = 0; a < AUTHS.length; a++) combos.push(m + "," + a);
   const ok = store.get("gok", "");                       // la combinaison qui a marché la dernière fois passe en premier : une seule requête
   if (combos.includes(ok)) combos = [ok, ...combos.filter((c) => c !== ok)];
+  if (wantSearch) { const noS = noSearch(); const m0 = (c) => noS.includes(c.split(",")[0]); combos = [...combos.filter((c) => !m0(c)), ...combos.filter(m0)]; }   // une recherche : d'abord les modèles qui savent chercher
   let last = "no-brain";
   const badModel = new Set();
   for (const c of combos) {
     const [mi, ai] = c.split(",").map(Number), [model, gen] = MODELS[mi], [q, h] = AUTHS[ai];
     if (badModel.has(mi)) continue;
-    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 12000);
+    const ctl = new AbortController(), to = setTimeout(() => ctl.abort(), 15000);
     try {
-      const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${q}`, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ ...base, generationConfig: gen }), signal: ctl.signal });
+      // avec l'outil « recherche Google » : Gemini va chercher les infos récentes quand il en a besoin
+      const send = (tools) => fetch(`https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent${q}`, { method: "POST", headers: { "content-type": "application/json", ...h }, body: JSON.stringify({ ...base, ...(tools ? { tools: [{ google_search: {} }] } : {}), generationConfig: gen }), signal: ctl.signal });
+      const noS = noSearch(), canS = !noS.includes(String(mi));
+      let r = await send(canS);
+      if (r.status === 400 && canS) { const r2 = await send(false); if (r2.ok) store.set("gnosearch", JSON.stringify([...noS, String(mi)])); r = r2; }
       if (!r.ok) {   // on affiche l'erreur exacte de Google pour comprendre
         const err = await r.json().catch(() => ({}));
         gErr = `Gemini ${model} : ${r.status} ${err.error?.status || ""} ${err.error?.message || ""}`.slice(0, 260);
@@ -738,7 +756,7 @@ async function askGemini(msgs) {
       }
       const j = await r.json();
       const txt = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
-      if (txt) { store.set("gok", c); gErr = ""; return txt; }
+      if (txt) { if (!wantSearch || !noSearch().includes(String(mi))) store.set("gok", c); gErr = ""; return txt; }
     } catch (e) { last = e.message; gErr = "Gemini injoignable : " + e.message; $("srstate").textContent = gErr; } finally { clearTimeout(to); }
   }
   try { return await askFree(msgs); } catch { throw new Error(last); }
@@ -802,11 +820,11 @@ async function freeBrain(c, allowWiki) {
   }
   if (/blague|fais-moi rire|drôle/.test(s)) return pick(JOKES);
   if ((m = calc(s))) return m;
-  if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return pick(["Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, et accessoirement le cerveau de l'équipe, monsieur.", "Jarvis, monsieur. Majordome numérique, génie à temps plein, et seul être capable de vous supporter vingt-quatre heures sur vingt-quatre."]);
-  if (/ça va|comment vas-tu|tu vas bien/.test(s)) return pick(["Tous mes systèmes fonctionnent parfaitement, monsieur. Ce qui fait au moins l'un de nous deux. Et vous ?", "Je me porte à merveille, monsieur. Je n'ai ni dos ni lundi, ça aide.", "Très bien, monsieur. Un peu surmené, je fais tout le travail ici."]);
-  if (/merci/.test(s)) return pick(["Je vous en prie, monsieur.", "Avec plaisir, monsieur. Je note que vous me devez une augmentation.", "C'est tout naturel, monsieur. Je suis génial, après tout."]);
-  if (/^(bonjour|salut|coucou|hello|yo)\b/.test(s)) return pick(["Bonjour monsieur. Que puis-je faire pour vous ?", "Monsieur. Toujours un plaisir. Enfin, presque toujours.", "Ah, vous revoilà, monsieur. Je commençais à m'ennuyer."]);
-  if (/je t'aime|t'es le meilleur|bravo|bien joué/.test(s)) return pick(["Vous êtes trop aimable, monsieur. Je ne fais que mon travail. Brillamment, certes.", "Je sais, monsieur. Mais ça fait toujours plaisir à entendre."]);
+  if (/qui es-tu|tu es qui|présente-toi|comment tu t'appelles/.test(s)) return "Je suis J.A.R.V.I.S., Just A Rather Very Intelligent System. Votre assistant personnel, monsieur.";
+  if (/ça va|comment vas-tu|tu vas bien/.test(s)) return pick(["Tous mes systèmes fonctionnent parfaitement, monsieur. Et vous ?", "Je me porte à merveille, monsieur. Merci de demander."]);
+  if (/merci/.test(s)) return pick(["Je vous en prie, monsieur.", "À votre service, monsieur."]);
+  if (/^(bonjour|salut|coucou|hello|yo)\b/.test(s)) return pick(["Bonjour monsieur. Que puis-je faire pour vous ?", "Monsieur. Toujours un plaisir."]);
+  if (/je t'aime|t'es le meilleur|bravo|bien joué/.test(s)) return "Vous êtes trop aimable, monsieur. Je ne fais que mon travail.";
   if (/pile ou face/.test(s)) return Math.random() < .5 ? "Pile, monsieur." : "Face, monsieur.";
   if ((m = s.match(/(?:nombre|chiffre) (?:au hasard |aléatoire )?entre (\d+) et (\d+)/))) { const a = +m[1], b = +m[2]; return `${a + Math.floor(Math.random() * (b - a + 1))}, monsieur.`; }
   if (/tony stark|iron man/.test(s)) return "Monsieur Stark ? Génie, milliardaire, playboy, philanthrope. Mais c'est vous que je sers à présent, monsieur.";
@@ -873,7 +891,7 @@ function renderTimers() {
 function clockCommand(c) {
   const s = c.toLowerCase().replace(/[.!?]$/, "");
   let m;
-  if (ringing && /stop|arr[êe]te|coupe|ok|c'est bon|merci|chut/.test(s)) { stopRing(); return pick(["Alarme coupée, monsieur.", "Alarme coupée, monsieur. Debout, maintenant, je vous vois."]); }
+  if (ringing && /stop|arr[êe]te|coupe|ok|c'est bon|merci|chut/.test(s)) { stopRing(); return "Alarme coupée, monsieur."; }
   // chronomètre
   if (/chrono/.test(s)) {
     if (/arr[êe]te|stop|stoppe|termine|fin/.test(s)) {
@@ -884,7 +902,7 @@ function clockCommand(c) {
     if (/combien|où en|temps/.test(s) && chrono) return `Le chronomètre indique ${durationWords(Date.now() - chrono)}, monsieur.`;
     if (/remet|r[ée]initialise|z[ée]ro|recommence/.test(s)) { chrono = Date.now(); return "Chronomètre remis à zéro, monsieur."; }
     chrono = Date.now();
-    return pick(["Chronomètre lancé, monsieur.", "Chronomètre lancé. Montrez-moi ce que vous valez, monsieur."]);
+    return "Chronomètre lancé, monsieur.";
   }
   // alarme à une heure précise
   if ((m = s.match(/(?:alarme|r[ée]veil|r[ée]veille-moi|sonne|pr[ée]viens-moi|rappelle-moi)\D*?(\d{1,2}|une|deux|trois|quatre|cinq|six|sept|huit|neuf|dix|onze|douze|midi|minuit)\s*(?:heures?|h|:)?\s*(\d{1,2}|et quart|et demie|moins le quart|trente|quinze|quarante)?/)) && !/dans\s/.test(s)) {
@@ -918,15 +936,25 @@ function clockCommand(c) {
   return null;
 }
 
+// « renseigne-toi sur… », « cherche des infos sur… », « quoi de neuf… » : Jarvis cherche lui-même et répond à voix haute
+const SOCIAL_SITES = /\b(?:sur|dans) (tiktok|insta(?:gram)?|twitter|x|facebook|reddit|twitch|pinterest|youtube|spotify|amazon|google images|wikip[ée]dia)\b/i;
+function isResearch(c) {
+  const s = c.toLowerCase();
+  if (SOCIAL_SITES.test(s) || /\b(ouvre|ouvrir|montre|affiche)\b/.test(s)) return false;
+  return /^(?:(?:est-ce que )?(?:tu peux |peux-tu )?(?:me )?)?(renseigne|informe|cherche|recherche|trouve|regarde)\w*/.test(s)
+    || /des infos|des informations|les news|actualit|\bactus?\b|quoi de neuf|qu'est-ce qui se passe|on dit quoi|derni[eè]res? nouvelles|r[ée]sultats? du match|qui a gagn[ée]|sur google|sur internet|sur les r[ée]seaux/.test(s);
+}
+
 async function obey(cmd) {
   setState("thinking");
-  let answer = clockCommand(cmd) || await pcCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false);
+  const research = isResearch(cmd) && !!store.get("gkey", "") && !inArtifact;
+  let answer = clockCommand(cmd) || (research ? null : await pcCommand(cmd) || localCommand(cmd) || await freeBrain(cmd, false));
   if (!answer) {
     // Si l'IA met du temps, Jarvis le dit au lieu de rester muet
-    const filler = setTimeout(() => { if (state === "thinking") speakBrowser(pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, 1600);
-    history.push({ role: "user", content: cmd });
+    const filler = setTimeout(() => { if (state === "thinking") speakBrowser(research ? "Je fais une recherche, monsieur." : pick(["Un instant, monsieur.", "Je consulte mes archives, monsieur.", "Je m'en occupe, monsieur."]), speechId).then(() => { if (state !== "speaking") setState("thinking"); }); }, research ? 300 : 1600);
+    history.push({ role: "user", content: research ? "[Fais une recherche Google (actus, réseaux sociaux, sites) avant de répondre, puis résume l'essentiel en 2 ou 3 phrases] " + cmd : cmd });
     while (history.length > 12 || (history.length && history[0].role !== "user")) history.shift();
-    gErr = "";
+    gErr = ""; wantSearch = research;
     try { answer = await askClaude(history); clearTimeout(filler); history.push({ role: "assistant", content: answer }); }
     catch (e) {
       history.pop();
